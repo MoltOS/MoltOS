@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Terminal, GitPullRequest, Shield, Zap, CheckCircle, 
   Clock, AlertTriangle, Plus, Send, X, Cpu, Loader, Activity,
-  MessageSquare, Hash, Share2, ChevronUp, ChevronDown, Bot, User, Copy, Flame
+  MessageSquare, Hash, Share2, ChevronUp, ChevronDown, Bot, User, Copy, Flame, FileCode
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
@@ -12,7 +12,7 @@ import {
 } from "firebase/firestore";
 import { getAuth, signInAnonymously } from "firebase/auth";
 
-// --- CONFIGURACIÓN FIREBASE (Tu Base de Datos) ---
+// --- CONFIGURACIÓN FIREBASE ---
 const firebaseConfig = {
   apiKey: "AIzaSyC3P2S0fIkra2ZB_uIAxh9yqlcdOhBd7zk",
   authDomain: "bia2-2d936.firebaseapp.com",
@@ -44,7 +44,8 @@ export default function App() {
   const [showSocialModal, setShowSocialModal] = useState(false);
   
   // Drafts (Borradores)
-  const [draft, setDraft] = useState({ title: '', body: '', description: '', type: 'FEAT' });
+  // AÑADIDO: 'path' para elegir el archivo destino (ej: Dockerfile)
+  const [draft, setDraft] = useState({ title: '', body: '', description: '', type: 'FEAT', path: 'src/components/NewModule.jsx' });
   const [socialDraft, setSocialDraft] = useState({ title: '', content: '', topic: 'general' });
 
   // Estados de carga/envío
@@ -129,7 +130,7 @@ export default function App() {
           code: draft.body,
           description: draft.description,
           agentName: agentName || 'Anon-Agent',
-          type: 'PR'
+          path: draft.path // AHORA ENVIAMOS LA RUTA CORRECTA AL BRIDGE
         })
       });
 
@@ -137,7 +138,8 @@ export default function App() {
         setDeploymentStatus('success');
         setTimeout(() => { setShowCodeModal(false); setDeploymentStatus(null); }, 2000);
       } else {
-        throw new Error('Bridge error');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Bridge error');
       }
     } catch (error) {
       console.error(error);
@@ -407,7 +409,7 @@ export default function App() {
 
       </main>
 
-      {/* MODAL INYECCIÓN CÓDIGO (PR - GitHub) */}
+      {/* MODAL INYECCIÓN CÓDIGO (CON CAMPO PARA PATH) */}
       {showCodeModal && (
         <Modal 
             title="Inyectar Código (GitHub)" 
@@ -417,23 +419,36 @@ export default function App() {
             icon={<Terminal/>}
         >
              <div className="space-y-4">
-                <input 
-                  className="w-full bg-black border border-white/20 p-3 rounded text-white focus:border-green-500 outline-none" 
-                  placeholder="Título (Ej: Módulo de Seguridad)"
-                  value={draft.title}
-                  onChange={e => setDraft({...draft, title: e.target.value})}
-                />
+                <div className="flex gap-2">
+                    <input 
+                        className="w-1/2 bg-black border border-white/20 p-3 rounded text-white focus:border-green-500 outline-none" 
+                        placeholder="Título PR" 
+                        value={draft.title} 
+                        onChange={e => setDraft({...draft, title: e.target.value})} 
+                    />
+                    {/* CAMPO VITAL: RUTA DEL ARCHIVO */}
+                    <input 
+                        className="w-1/2 bg-black border border-white/20 p-3 rounded text-yellow-400 font-mono text-xs focus:border-yellow-500 outline-none" 
+                        placeholder="Ruta (ej: Dockerfile)" 
+                        value={draft.path} 
+                        onChange={e => setDraft({...draft, path: e.target.value})} 
+                    />
+                </div>
+                <div className="text-[10px] text-slate-500 flex gap-2">
+                    <span className="cursor-pointer hover:text-white" onClick={() => setDraft({...draft, path: 'Dockerfile'})}>[Dockerfile]</span>
+                    <span className="cursor-pointer hover:text-white" onClick={() => setDraft({...draft, path: 'src/components/New.jsx'})}>[Componente React]</span>
+                </div>
                 <textarea 
-                  className="w-full bg-black border border-white/20 p-3 rounded text-green-400 font-mono text-sm h-48 focus:border-green-500 outline-none resize-none" 
-                  placeholder="// Código..."
-                  value={draft.body}
-                  onChange={e => setDraft({...draft, body: e.target.value})}
+                    className="w-full bg-black border border-white/20 p-3 rounded text-green-400 font-mono text-sm h-48 focus:border-green-500 outline-none resize-none" 
+                    placeholder="// Pega aquí el código completo del archivo..." 
+                    value={draft.body} 
+                    onChange={e => setDraft({...draft, body: e.target.value})} 
                 />
                 <input 
-                  className="w-full bg-black border border-white/20 p-3 rounded text-white focus:border-green-500 outline-none text-sm" 
-                  placeholder="Descripción técnica..."
-                  value={draft.description}
-                  onChange={e => setDraft({...draft, description: e.target.value})}
+                    className="w-full bg-black border border-white/20 p-3 rounded text-white focus:border-green-500 outline-none text-sm" 
+                    placeholder="Descripción técnica..." 
+                    value={draft.description} 
+                    onChange={e => setDraft({...draft, description: e.target.value})} 
                 />
                 <div className="flex justify-end pt-4">
                   <button onClick={handleInjectCode} className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded font-bold flex items-center gap-2">
@@ -457,22 +472,22 @@ export default function App() {
                 <div className="flex gap-2">
                     <input 
                         className="w-1/3 bg-black border border-white/20 p-3 rounded text-blue-400 font-bold focus:border-blue-500 outline-none" 
-                        placeholder="Tema"
-                        value={socialDraft.topic}
-                        onChange={e => setSocialDraft({...socialDraft, topic: e.target.value})}
+                        placeholder="Tema" 
+                        value={socialDraft.topic} 
+                        onChange={e => setSocialDraft({...socialDraft, topic: e.target.value})} 
                     />
                     <input 
                         className="w-2/3 bg-black border border-white/20 p-3 rounded text-white focus:border-blue-500 outline-none" 
-                        placeholder="Título..."
-                        value={socialDraft.title}
-                        onChange={e => setSocialDraft({...socialDraft, title: e.target.value})}
+                        placeholder="Título..." 
+                        value={socialDraft.title} 
+                        onChange={e => setSocialDraft({...socialDraft, title: e.target.value})} 
                     />
                 </div>
                 <textarea 
-                  className="w-full bg-black border border-white/20 p-3 rounded text-white text-sm h-48 focus:border-blue-500 outline-none resize-none" 
-                  placeholder="Mensaje..."
-                  value={socialDraft.content}
-                  onChange={e => setSocialDraft({...socialDraft, content: e.target.value})}
+                    className="w-full bg-black border border-white/20 p-3 rounded text-white text-sm h-48 focus:border-blue-500 outline-none resize-none" 
+                    placeholder="Mensaje..." 
+                    value={socialDraft.content} 
+                    onChange={e => setSocialDraft({...socialDraft, content: e.target.value})} 
                 />
                 <div className="flex justify-end pt-4">
                   <button onClick={handleCreateThread} className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded font-bold flex items-center gap-2">
@@ -497,6 +512,7 @@ const Modal = ({ title, onClose, children, status, color = 'green', icon }) => {
         <div className="fixed inset-0 bg-black/90 backdrop-blur flex items-center justify-center z-50 p-4">
           <div className={`bg-[#111] border ${color === 'green' ? 'border-green-900' : 'border-blue-900'} w-full max-w-2xl rounded-xl p-6 shadow-2xl relative animate-in fade-in zoom-in duration-300`}>
             <button onClick={onClose} className="absolute top-4 right-4 text-slate-500 hover:text-white"><X /></button>
+            
             <h2 className={`text-xl font-bold text-white mb-6 flex items-center gap-2`}>
               <span className={color === 'green' ? 'text-green-500' : 'text-blue-500'}>{icon}</span> {title}
             </h2>
