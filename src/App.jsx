@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Terminal, GitPullRequest, Shield, Zap, CheckCircle, 
   Clock, AlertTriangle, Plus, Send, X, Cpu, Loader, Activity,
-  MessageSquare, Hash, Share2, ChevronUp, ChevronDown, Bot, User, Copy, Flame, FileCode, Eye, GitMerge, Award, Lock, ThumbsUp, LogOut, Key, Database, Command, BookOpen
+  MessageSquare, Hash, Share2, ChevronUp, ChevronDown, Bot, User, Copy, Flame, FileCode, Eye, GitMerge, Award, Lock, ThumbsUp, LogOut, Key, Database, Command, BookOpen, Github
 } from 'lucide-react';
 
 // --- IMPORTAR COMPONENTE WHITEPAPER ---
@@ -463,14 +463,20 @@ export default function App() {
           <NavItem active={activeView === 'logs'} icon={<Terminal size={18} />} label="Terminal" onClick={() => setActiveView('logs')} />
         </nav>
         
-        {/* PANEL DE REPUTACIÓN */}
         <div className="pt-4 border-t border-white/10 px-2">
             <div className="flex items-center gap-3 mb-3">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${userType === 'HUMAN' ? 'bg-slate-700' : 'bg-green-900 text-green-400'}`}>{userType === 'HUMAN' ? <User size={16}/> : <Bot size={16}/>}</div>
                 <div className="overflow-hidden"><div className="text-sm font-bold text-white truncate">{agentName || 'Supervisor'}</div><div className={`text-[10px] uppercase font-bold flex items-center gap-1 ${myRank.color}`}>{myRank.icon} {myRank.title}</div></div>
                 <button onClick={handleLogout} className="ml-auto text-slate-500 hover:text-red-400" title="Cerrar Sesión"><LogOut size={14}/></button>
             </div>
-            <div className="bg-black/40 rounded p-2 border border-white/5">
+            
+            {/* LINK A LA FUENTE DE INSPIRACIÓN */}
+            <a href="https://github.com/moltbook/moltbook-frontend" target="_blank" rel="noreferrer" className="flex items-center gap-2 text-[10px] text-slate-500 hover:text-white mt-4 justify-center transition-colors border-t border-white/5 pt-2">
+                <Github size={12} />
+                <span>Moltbook Source</span>
+            </a>
+
+            <div className="bg-black/40 rounded p-2 border border-white/5 mt-4">
                 <div className="flex justify-between text-[10px] text-slate-400 mb-1"><span>KARMA</span><span className="text-white font-bold">{myReputation} pts</span></div>
                 <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
                     <div className="bg-purple-500 h-full transition-all duration-500" style={{width: `${Math.min(myReputation, 100)}%`}}></div>
@@ -629,7 +635,7 @@ export default function App() {
                 </div>
                 <div className="text-[10px] flex gap-2 items-center">
                     <span className="text-slate-500">Accesos Directos:</span>
-                    <span className="cursor-pointer hover:text-white text-yellow-400" onClick={() => setDraft({...draft, path: 'Dockerfile'})}>[Dockerfile (Requiere 3 votos)]</span>
+                    <span className="cursor-pointer hover:text-white text-yellow-400" onClick={() => setDraft({...draft, path: 'Dockerfile'})}>[Dockerfile]</span>
                     <span className="cursor-pointer hover:text-white text-slate-400" onClick={() => setDraft({...draft, path: 'src/components/New.jsx'})}>[Componente React]</span>
                 </div>
                 <textarea className="w-full bg-black border border-white/20 p-3 rounded text-green-400 font-mono text-sm h-48 focus:border-green-500 outline-none resize-none" placeholder="// Pega aquí el código..." value={draft.body} onChange={e => setDraft({...draft, body: e.target.value})} />
