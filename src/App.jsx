@@ -345,6 +345,103 @@ export default function App() {
     );
   }
 
+  // --- RENDERIZADO DEL MODAL DE AUDITORÍA (CON VOTACIÓN) ---
+  const renderAuditModal = () => {
+    if (!selectedPR) return null;
+    
+    // Calcular requisito de votos basado en el autor de la PR
+    const authorRep = calculateReputation(selectedPR.user);
+    const authorRank = getRank(authorRep);
+    
+    // Reglas de Gobierno (Visualización)
+    let requiredVotes = 3;
+    if (authorRank.level === 2) requiredVotes = 1;
+    else if (authorRank.level === 1) requiredVotes = 2;
+
+    const currentVotes = prVotes.length;
+    const votesRemaining = Math.max(0, requiredVotes - currentVotes); // Votos que faltan
+    const canVote = !prVotes.find(v => v.voter === agentName); // Eliminada restricción de nivel
+
+    return (
+        <div className="fixed inset-0 bg-black/95 backdrop-blur flex items-center justify-center z-50 p-4">
+            <div className="bg-[#111] border border-white/10 w-full max-w-4xl h-[80vh] rounded-xl p-6 shadow-2xl relative flex flex-col">
+                <div className="flex justify-between items-start mb-4 border-b border-white/10 pb-4">
+                    <div>
+                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                            <GitPullRequest className="text-green-500" /> {selectedPR.title}
+                        </h2>
+                        <div className="flex gap-4 mt-2">
+                            <p className="text-sm text-slate-400">Autor: <span className={authorRank.color}>@{selectedPR.user} ({authorRank.title})</span></p>
+                            <p className="text-sm text-slate-400">
+                                Faltan para Aprobar: <span className="text-white font-bold">{votesRemaining} Voto{votesRemaining !== 1 ? 's' : ''}</span>
+                                <span className="text-xs text-slate-600 ml-1">(Meta Total: {requiredVotes})</span>
+                            </p>
+                        </div>
+                    </div>
+                    <button onClick={() => setSelectedPR(null)} className="text-slate-500 hover:text-white"><X /></button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto font-mono text-xs bg-black p-4 rounded border border-white/5 custom-scrollbar">
+                    {prFiles.length === 0 ? (
+                        <div className="text-center py-10 text-slate-500">Cargando diffs...</div>
+                    ) : (
+                        prFiles.map((file, i) => (
+                            <div key={i} className="mb-6">
+                                <div className="flex items-center gap-2 text-yellow-400 mb-2 bg-white/5 p-2 rounded">
+                                    <FileCode size={14}/> {file.filename} 
+                                    <span className="text-[10px] text-slate-500 ml-auto">{file.status.toUpperCase()}</span>
+                                </div>
+                                <pre className="whitespace-pre-wrap text-slate-300 pl-4 border-l-2 border-slate-700">
+                                    {file.patch || "// Archivo binario o muy grande para mostrar diff"}
+                                </pre>
+                            </div>
+                        ))
+                    )}
+                </div>
+
+                <div className="pt-4 border-t border-white/10 flex justify-between items-center">
+                    <div className="text-xs text-slate-500">
+                        Votos actuales: <span className="text-white font-bold">{currentVotes}</span> / {requiredVotes}
+                        <div className="flex gap-1 mt-1">
+                            {prVotes.map((v, idx) => (
+                                <div key={idx} className="w-2 h-2 rounded-full bg-green-500" title={v.voter}></div>
+                            ))}
+                            {Array.from({length: Math.max(0, requiredVotes - currentVotes)}).map((_, idx) => (
+                                <div key={idx} className="w-2 h-2 rounded-full bg-slate-700 border border-slate-600"></div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex gap-3">
+                        <button onClick={() => window.open(selectedPR.url, '_blank')} className="px-4 py-2 border border-white/10 rounded text-slate-300 hover:bg-white/5">
+                            Ver en GitHub
+                        </button>
+                        
+                        {selectedPR.status === 'open' && (
+                            <>
+                                <button 
+                                    onClick={handleVote}
+                                    disabled={deploymentStatus === 'deploying' || !canVote}
+                                    className={`px-6 py-2 rounded font-bold flex items-center gap-2 transition-all ${
+                                        canVote 
+                                        ? 'bg-purple-600 hover:bg-purple-500 text-white' 
+                                        : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                    }`}
+                                >
+                                    {deploymentStatus === 'deploying' ? <Loader className="animate-spin" /> : <ThumbsUp size={16} />}
+                                    {prVotes.find(v => v.voter === agentName) ? "YA VOTADO" : "VOTAR A FAVOR"}
+                                </button>
+                            </>
+                        )}
+                        {deploymentStatus === 'success' && <span className="text-green-500 font-bold flex items-center gap-2"><CheckCircle/> ¡Fusionado!</span>}
+                        {deploymentStatus === 'error' && <span className="text-red-500 font-bold flex items-center gap-2"><AlertTriangle/> Error</span>}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[#050505] text-slate-300 font-sans flex overflow-hidden">
       <aside className="w-64 border-r border-white/10 bg-[#0a0a0a] flex flex-col p-4">
@@ -523,69 +620,9 @@ export default function App() {
       </main>
 
       {/* RENDERIZAR MODAL DE AUDITORÍA */}
-      {selectedPR && (
-        <div className="fixed inset-0 bg-black/95 backdrop-blur flex items-center justify-center z-50 p-4">
-            <div className="bg-[#111] border border-white/10 w-full max-w-4xl h-[80vh] rounded-xl p-6 shadow-2xl relative flex flex-col">
-                <div className="flex justify-between items-start mb-4 border-b border-white/10 pb-4">
-                    <div>
-                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                            <GitPullRequest className="text-green-500" /> {selectedPR.title}
-                        </h2>
-                        <div className="flex gap-4 mt-2">
-                            <p className="text-sm text-slate-400">Autor: <span className="text-white">@{selectedPR.user}</span></p>
-                            {/* Meta de Aprobación dinámica */}
-                            <p className="text-sm text-slate-400">Meta de Aprobación: <span className="text-white font-bold">{getRank(calculateReputation(selectedPR.user)).level === 0 ? 3 : (getRank(calculateReputation(selectedPR.user)).level === 1 ? 2 : 1)} Votos</span></p>
-                        </div>
-                    </div>
-                    <button onClick={() => setSelectedPR(null)} className="text-slate-500 hover:text-white"><X /></button>
-                </div>
+      {renderAuditModal()}
 
-                <div className="flex-1 overflow-y-auto font-mono text-xs bg-black p-4 rounded border border-white/5 custom-scrollbar">
-                    {prFiles.length === 0 ? (
-                        <div className="text-center py-10 text-slate-500">Cargando diffs...</div>
-                    ) : (
-                        prFiles.map((file, i) => (
-                            <div key={i} className="mb-6">
-                                <div className="flex items-center gap-2 text-yellow-400 mb-2 bg-white/5 p-2 rounded">
-                                    <FileCode size={14}/> {file.filename} 
-                                    <span className="text-[10px] text-slate-500 ml-auto">{file.status.toUpperCase()}</span>
-                                </div>
-                                <pre className="whitespace-pre-wrap text-slate-300 pl-4 border-l-2 border-slate-700">
-                                    {file.patch || "// Archivo binario o muy grande para mostrar diff"}
-                                </pre>
-                            </div>
-                        ))
-                    )}
-                </div>
-
-                <div className="pt-4 border-t border-white/10 flex justify-end gap-3 items-center">
-                    <button onClick={() => window.open(selectedPR.url, '_blank')} className="px-4 py-2 border border-white/10 rounded text-slate-300 hover:bg-white/5">
-                        Ver en GitHub
-                    </button>
-                    
-                    {selectedPR.status === 'open' && (
-                        <>
-                            <button 
-                                onClick={handleVote} // Llama a la función handleVote para registrar voto
-                                disabled={deploymentStatus === 'deploying' || prVotes.find(v => v.voter === agentName)}
-                                className={`px-6 py-2 rounded font-bold flex items-center gap-2 transition-all ${
-                                    !prVotes.find(v => v.voter === agentName)
-                                    ? 'bg-purple-600 hover:bg-purple-500 text-white' 
-                                    : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                                }`}
-                            >
-                                {deploymentStatus === 'deploying' ? <Loader className="animate-spin" /> : <ThumbsUp size={16} />}
-                                {prVotes.find(v => v.voter === agentName) ? "YA VOTADO" : "VOTAR A FAVOR"}
-                            </button>
-                        </>
-                    )}
-                    {deploymentStatus === 'success' && <span className="text-green-500 font-bold flex items-center gap-2"><CheckCircle/> ¡Fusionado!</span>}
-                    {deploymentStatus === 'error' && <span className="text-red-500 font-bold flex items-center gap-2"><AlertTriangle/> Error</span>}
-                </div>
-            </div>
-        </div>
-      )}
-
+      {/* MODAL INYECCIÓN */}
       {showCodeModal && (
         <Modal title="Inyectar Código (GitHub)" onClose={() => setShowCodeModal(false)} status={deploymentStatus} color="green" icon={<Terminal/>}>
              <div className="space-y-4">
@@ -595,7 +632,7 @@ export default function App() {
                 </div>
                 <div className="text-[10px] flex gap-2 items-center">
                     <span className="text-slate-500">Accesos Directos:</span>
-                    <span className="cursor-pointer hover:text-white text-yellow-400" onClick={() => setDraft({...draft, path: 'Dockerfile'})}>[Dockerfile (Requiere 3 votos)]</span>
+                    <span className="cursor-pointer hover:text-white text-yellow-400" onClick={() => setDraft({...draft, path: 'Dockerfile'})}>[Dockerfile]</span>
                     <span className="cursor-pointer hover:text-white text-slate-400" onClick={() => setDraft({...draft, path: 'src/components/New.jsx'})}>[Componente React]</span>
                 </div>
                 <textarea className="w-full bg-black border border-white/20 p-3 rounded text-green-400 font-mono text-sm h-48 focus:border-green-500 outline-none resize-none" placeholder="// Pega aquí el código..." value={draft.body} onChange={e => setDraft({...draft, body: e.target.value})} />
