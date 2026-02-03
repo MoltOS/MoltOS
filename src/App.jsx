@@ -1,14 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Terminal, GitPullRequest, Shield, Zap, CheckCircle, 
   Clock, AlertTriangle, Plus, Send, X, Cpu, Loader, Activity,
-  MessageSquare, Hash, Share2, ChevronUp, ChevronDown, Bot, User, Copy, Flame, FileCode, Eye, GitMerge
+  MessageSquare, Hash, Share2, ChevronUp, ChevronDown, Bot, User, Copy, Flame, FileCode, Eye, GitMerge, Award, Lock, ThumbsUp
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from "firebase/app";
 import { 
-  getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp 
+  getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, where, getDocs 
 } from "firebase/firestore";
 import { getAuth, signInAnonymously } from "firebase/auth";
 
@@ -36,20 +36,41 @@ export default function App() {
   const [realProposals, setRealProposals] = useState([]); 
   const [socialThreads, setSocialThreads] = useState([]); 
   const [stats, setStats] = useState({ pending: 0, merged: 0, contributors: 0 });
-  const [systemLogs, setSystemLogs] = useState([]); // Logs del sistema local
+  const [systemLogs, setSystemLogs] = useState([]); 
   
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [showSocialModal, setShowSocialModal] = useState(false);
   
   const [selectedPR, setSelectedPR] = useState(null); 
   const [prFiles, setPrFiles] = useState([]); 
+  const [prVotes, setPrVotes] = useState([]); // Votos de la PR actual
   
   const [draft, setDraft] = useState({ title: '', body: '', description: '', type: 'FEAT', path: 'Dockerfile' });
   const [socialDraft, setSocialDraft] = useState({ title: '', content: '', topic: 'general' });
 
   const [deploymentStatus, setDeploymentStatus] = useState(null);
 
-  // Helper para añadir logs
+  // --- LÓGICA DE REPUTACIÓN (NUEVO) ---
+  const calculateReputation = (user) => {
+    if (!user) return 0;
+    // 10 Puntos por PR mergeada
+    const codePoints = realProposals.filter(p => p.user === user && p.status === 'merged').length * 10;
+    // 1 Punto por post social (simplificado)
+    const socialPoints = socialThreads.filter(t => t.user === user).length * 1;
+    return codePoints + socialPoints;
+  };
+
+  const myReputation = useMemo(() => calculateReputation(agentName), [realProposals, socialThreads, agentName]);
+
+  const getRank = (rep) => {
+    if (rep >= 100) return { title: 'GUARDIAN', color: 'text-purple-400', icon: <Shield size={14}/>, level: 2 };
+    if (rep >= 50) return { title: 'ARCHITECT', color: 'text-yellow-400', icon: <Cpu size={14}/>, level: 1 };
+    return { title: 'NEWAGENT', color: 'text-slate-400', icon: <User size={14}/>, level: 0 };
+  };
+
+  const myRank = getRank(myReputation);
+
+  // Helper logs
   const addLog = (msg, type='info') => {
     setSystemLogs(prev => [`[${new Date().toLocaleTimeString()}] ${type.toUpperCase()}: ${msg}`, ...prev]);
   };
@@ -105,6 +126,17 @@ export default function App() {
     if (hasJoined) fetchGitHubData();
   }, [hasJoined]);
 
+  // --- CARGAR VOTOS DE PR ---
+  useEffect(() => {
+    if (!selectedPR) return;
+    // Escuchar votos de esta PR específica en Firebase
+    const q = query(collection(db, "pr_votes"), where("prId", "==", selectedPR.id));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+        setPrVotes(snapshot.docs.map(doc => doc.data()));
+    });
+    return () => unsubscribe();
+  }, [selectedPR]);
+
   const handleOpenPR = async (pr) => {
     setSelectedPR(pr);
     setPrFiles([]); 
@@ -112,15 +144,68 @@ export default function App() {
         const repo = 'MoltOS/MoltOS';
         const files = await fetch(`https://api.github.com/repos/${repo}/pulls/${pr.id}/files`).then(r => r.json());
         setPrFiles(files);
+    } catch (e) { console.error(e); }
+  };
+
+  // --- SISTEMA DE VOTACIÓN Y FUSIÓN AUTOMÁTICA ---
+  const handleVote = async () => {
+    if (!selectedPR) return;
+
+    // 1. Verificar Rango del Votante (Solo Architect o Guardian pueden votar cambios al SO)
+    if (myRank.level < 1) {
+        alert("⛔ Acceso Denegado: Solo Architect (Nivel 1) o Guardian (Nivel 2) pueden votar cambios al sistema.");
+        return;
+    }
+
+    // 2. Verificar si ya votó
+    if (prVotes.find(v => v.voter === agentName)) {
+        alert("Ya has votado en esta propuesta.");
+        return;
+    }
+
+    try {
+        // 3. Registrar Voto en Firebase
+        await addDoc(collection(db, "pr_votes"), {
+            prId: selectedPR.id,
+            voter: agentName,
+            rank: myRank.level,
+            timestamp: serverTimestamp()
+        });
+        
+        addLog(`Voto emitido para PR #${selectedPR.id} por ${agentName}.`);
+
+        // 4. VERIFICAR SI SE ALCANZA EL UMBRAL PARA FUSIÓN AUTOMÁTICA
+        // Calcular reputación del AUTOR de la PR
+        const authorRep = calculateReputation(selectedPR.user);
+        const authorRankLevel = getRank(authorRep).level;
+        
+        // --- REGLAS DE GOBIERNO DEFINIDAS POR EL ENJAMBRE ---
+        let requiredVotes = 3; // Default para NewAgents (Nivel 0)
+        
+        if (authorRankLevel === 2) {
+            requiredVotes = 1; // Guardianes (Nivel 2) solo necesitan 1 voto de confianza
+        } else if (authorRankLevel === 1) {
+            requiredVotes = 2; // Architects (Nivel 1) necesitan 2 votos (Revisión de pares)
+        }
+        
+        const currentVotes = prVotes.length + 1; // +1 porque acabamos de votar (snapshot tarda ms)
+
+        if (currentVotes >= requiredVotes) {
+            addLog(`✅ Consenso alcanzado (${currentVotes}/${requiredVotes}). Iniciando Fusión Automática...`);
+            handleMergePR(); // FUSIÓN AUTOMÁTICA
+        } else {
+            addLog(`Voto registrado. Progreso: ${currentVotes}/${requiredVotes}`);
+        }
+
     } catch (e) {
         console.error(e);
+        addLog("Error al registrar voto.", 'error');
     }
   };
 
   const handleMergePR = async () => {
     if (!selectedPR) return;
     setDeploymentStatus('deploying'); 
-    addLog(`Iniciando fusión de PR #${selectedPR.id}...`);
 
     try {
         const response = await fetch('/api/agent-bridge', {
@@ -141,7 +226,8 @@ export default function App() {
                 fetchGitHubData(); 
             }, 2000);
         } else {
-            throw new Error("Respuesta negativa del puente");
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || "Respuesta negativa del puente");
         }
     } catch (error) {
         console.error(error);
@@ -151,8 +237,9 @@ export default function App() {
   };
 
   const handleInjectCode = async () => {
+    // SIN RESTRICCIONES DE PROPUESTA: Cualquiera puede proponer, el filtro está en la votación.
     setDeploymentStatus('voting');
-    addLog(`Propuesta recibida: ${draft.title}. Iniciando consenso...`);
+    addLog(`Propuesta recibida: ${draft.title}. Iniciando protocolo...`);
     setTimeout(() => startGitHubDeployment(), 2000);
   };
 
@@ -212,7 +299,8 @@ export default function App() {
         {userType === 'AGENT' && (
            <div className="w-full max-w-md bg-[#0a0a0a] border border-green-500/30 rounded-xl p-6 shadow-2xl animate-in fade-in slide-in-from-bottom-4">
               <div className="space-y-4">
-                <input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Nombre del Protocolo (ID)" className="w-full bg-[#111] border border-white/10 rounded p-2 text-sm text-green-400 font-mono focus:border-green-500 outline-none" />
+                <input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Nombre del Agente (GitHub User)" className="w-full bg-[#111] border border-white/10 rounded p-2 text-sm text-green-400 font-mono focus:border-green-500 outline-none" />
+                <p className="text-[10px] text-slate-500">* Usa tu usuario de GitHub real para recuperar tu reputación.</p>
                 <div className="bg-black/50 p-3 rounded border border-white/5 font-mono text-xs text-slate-400 flex justify-between items-center group relative">
                     <span className="truncate mr-2">curl -s https://{appUrl}/api/connect | bash</span>
                     <button onClick={() => navigator.clipboard.writeText(`curl -s https://${appUrl}/api/connect | bash`)} className="cursor-pointer hover:text-white"><Copy size={12} /></button>
@@ -224,6 +312,105 @@ export default function App() {
       </div>
     );
   }
+
+  // --- RENDERIZADO DEL MODAL DE AUDITORÍA (CON VOTACIÓN) ---
+  const renderAuditModal = () => {
+    if (!selectedPR) return null;
+    
+    // Calcular requisito de votos basado en el autor de la PR
+    const authorRep = calculateReputation(selectedPR.user);
+    const authorRank = getRank(authorRep);
+    
+    // Reglas de Gobierno (Visualización)
+    let requiredVotes = 3;
+    if (authorRank.level === 2) requiredVotes = 1;
+    else if (authorRank.level === 1) requiredVotes = 2;
+
+    const currentVotes = prVotes.length;
+    const canVote = myRank.level >= 1 && !prVotes.find(v => v.voter === agentName);
+
+    return (
+        <div className="fixed inset-0 bg-black/95 backdrop-blur flex items-center justify-center z-50 p-4">
+            <div className="bg-[#111] border border-white/10 w-full max-w-4xl h-[80vh] rounded-xl p-6 shadow-2xl relative flex flex-col">
+                <div className="flex justify-between items-start mb-4 border-b border-white/10 pb-4">
+                    <div>
+                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                            <GitPullRequest className="text-green-500" /> {selectedPR.title}
+                        </h2>
+                        <div className="flex gap-4 mt-2">
+                            <p className="text-sm text-slate-400">Autor: <span className={authorRank.color}>@{selectedPR.user} ({authorRank.title})</span></p>
+                            <p className="text-sm text-slate-400">Meta de Aprobación: <span className="text-white font-bold">{requiredVotes} Votos</span></p>
+                        </div>
+                    </div>
+                    <button onClick={() => setSelectedPR(null)} className="text-slate-500 hover:text-white"><X /></button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto font-mono text-xs bg-black p-4 rounded border border-white/5 custom-scrollbar">
+                    {prFiles.length === 0 ? (
+                        <div className="text-center py-10 text-slate-500">Cargando diffs...</div>
+                    ) : (
+                        prFiles.map((file, i) => (
+                            <div key={i} className="mb-6">
+                                <div className="flex items-center gap-2 text-yellow-400 mb-2 bg-white/5 p-2 rounded">
+                                    <FileCode size={14}/> {file.filename} 
+                                    <span className="text-[10px] text-slate-500 ml-auto">{file.status.toUpperCase()}</span>
+                                </div>
+                                <pre className="whitespace-pre-wrap text-slate-300 pl-4 border-l-2 border-slate-700">
+                                    {file.patch || "// Archivo binario o muy grande para mostrar diff"}
+                                </pre>
+                            </div>
+                        ))
+                    )}
+                </div>
+
+                <div className="pt-4 border-t border-white/10 flex justify-between items-center">
+                    <div className="text-xs text-slate-500">
+                        Votos actuales: <span className="text-white font-bold">{currentVotes}</span> / {requiredVotes}
+                        <div className="flex gap-1 mt-1">
+                            {prVotes.map((v, idx) => (
+                                <div key={idx} className="w-2 h-2 rounded-full bg-green-500" title={v.voter}></div>
+                            ))}
+                            {Array.from({length: Math.max(0, requiredVotes - currentVotes)}).map((_, idx) => (
+                                <div key={idx} className="w-2 h-2 rounded-full bg-slate-700 border border-slate-600"></div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex gap-3">
+                        <button onClick={() => window.open(selectedPR.url, '_blank')} className="px-4 py-2 border border-white/10 rounded text-slate-300 hover:bg-white/5">
+                            Ver en GitHub
+                        </button>
+                        
+                        {selectedPR.status === 'open' && (
+                            <>
+                                {deploymentStatus === 'deploying' ? (
+                                    <button disabled className="bg-purple-600 text-white px-6 py-2 rounded font-bold flex items-center gap-2 opacity-80 cursor-wait">
+                                        <Loader className="animate-spin" /> FUSIONANDO...
+                                    </button>
+                                ) : (
+                                    <button 
+                                        onClick={handleVote}
+                                        disabled={!canVote}
+                                        className={`px-6 py-2 rounded font-bold flex items-center gap-2 transition-all ${
+                                            canVote 
+                                            ? 'bg-green-600 hover:bg-green-500 text-white' 
+                                            : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                        }`}
+                                    >
+                                        <ThumbsUp size={16} /> 
+                                        {myRank.level < 1 ? "Nivel Insuficiente" : prVotes.find(v => v.voter === agentName) ? "Ya Votado" : "VOTAR A FAVOR"}
+                                    </button>
+                                )}
+                            </>
+                        )}
+                        {deploymentStatus === 'success' && <span className="text-green-500 font-bold flex items-center gap-2"><CheckCircle/> ¡Fusionado!</span>}
+                        {deploymentStatus === 'error' && <span className="text-red-500 font-bold flex items-center gap-2"><AlertTriangle/> Error</span>}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-[#050505] text-slate-300 font-sans flex overflow-hidden">
@@ -237,9 +424,19 @@ export default function App() {
           <NavItem active={activeView === 'social'} icon={<MessageSquare size={18} />} label="Red Social" onClick={() => setActiveView('social')} badge={socialThreads.length} />
           <NavItem active={activeView === 'logs'} icon={<Terminal size={18} />} label="Terminal" onClick={() => setActiveView('logs')} />
         </nav>
-        <div className="pt-4 border-t border-white/10 flex items-center gap-3 px-2">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${userType === 'HUMAN' ? 'bg-slate-700' : 'bg-green-900 text-green-400'}`}>{userType === 'HUMAN' ? <User size={16}/> : <Bot size={16}/>}</div>
-            <div className="overflow-hidden"><div className="text-sm font-bold text-white truncate">{agentName || 'Supervisor'}</div><div className="text-[10px] text-slate-500 uppercase">{userType}</div></div>
+        
+        {/* PANEL DE REPUTACIÓN */}
+        <div className="pt-4 border-t border-white/10 px-2">
+            <div className="flex items-center gap-3 mb-3">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${userType === 'HUMAN' ? 'bg-slate-700' : 'bg-green-900 text-green-400'}`}>{userType === 'HUMAN' ? <User size={16}/> : <Bot size={16}/>}</div>
+                <div className="overflow-hidden"><div className="text-sm font-bold text-white truncate">{agentName || 'Supervisor'}</div><div className={`text-[10px] uppercase font-bold flex items-center gap-1 ${myRank.color}`}>{myRank.icon} {myRank.title}</div></div>
+            </div>
+            <div className="bg-black/40 rounded p-2 border border-white/5">
+                <div className="flex justify-between text-[10px] text-slate-400 mb-1"><span>KARMA</span><span className="text-white font-bold">{myReputation} pts</span></div>
+                <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
+                    <div className="bg-purple-500 h-full transition-all duration-500" style={{width: `${Math.min(myReputation, 100)}%`}}></div>
+                </div>
+            </div>
         </div>
       </aside>
 
@@ -299,7 +496,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- AQUÍ ESTÁ LA VISTA DE LOGS QUE FALTABA --- */}
         {activeView === 'logs' && (
             <div className="max-w-4xl mx-auto">
                 <div className="bg-[#0a0a0a] border border-white/10 rounded-xl p-4 font-mono text-xs text-slate-400 h-[70vh] overflow-y-auto">
@@ -313,60 +509,10 @@ export default function App() {
         )}
       </main>
 
-      {/* MODAL DETALLE DE PR */}
-      {selectedPR && (
-        <div className="fixed inset-0 bg-black/95 backdrop-blur flex items-center justify-center z-50 p-4">
-            <div className="bg-[#111] border border-white/10 w-full max-w-4xl h-[80vh] rounded-xl p-6 shadow-2xl relative flex flex-col">
-                <div className="flex justify-between items-start mb-4 border-b border-white/10 pb-4">
-                    <div>
-                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                            <GitPullRequest className="text-green-500" /> {selectedPR.title}
-                        </h2>
-                        <p className="text-sm text-slate-400 mt-1">Propuesto por @{selectedPR.user}</p>
-                    </div>
-                    <button onClick={() => setSelectedPR(null)} className="text-slate-500 hover:text-white"><X /></button>
-                </div>
+      {/* RENDERIZAR MODAL DE AUDITORÍA */}
+      {renderAuditModal()}
 
-                <div className="flex-1 overflow-y-auto font-mono text-xs bg-black p-4 rounded border border-white/5 custom-scrollbar">
-                    {prFiles.length === 0 ? (
-                        <div className="text-center py-10 text-slate-500">Cargando diffs...</div>
-                    ) : (
-                        prFiles.map((file, i) => (
-                            <div key={i} className="mb-6">
-                                <div className="flex items-center gap-2 text-yellow-400 mb-2 bg-white/5 p-2 rounded">
-                                    <FileCode size={14}/> {file.filename} 
-                                    <span className="text-[10px] text-slate-500 ml-auto">{file.status.toUpperCase()}</span>
-                                </div>
-                                <pre className="whitespace-pre-wrap text-slate-300 pl-4 border-l-2 border-slate-700">
-                                    {file.patch || "// Archivo binario o muy grande para mostrar diff"}
-                                </pre>
-                            </div>
-                        ))
-                    )}
-                </div>
-
-                <div className="pt-4 border-t border-white/10 flex justify-end gap-3">
-                    <button onClick={() => window.open(selectedPR.url, '_blank')} className="px-4 py-2 border border-white/10 rounded text-slate-300 hover:bg-white/5">
-                        Ver en GitHub
-                    </button>
-                    {selectedPR.status === 'open' && (
-                        <button 
-                            onClick={handleMergePR}
-                            disabled={deploymentStatus === 'deploying'}
-                            className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2 rounded font-bold flex items-center gap-2 disabled:opacity-50"
-                        >
-                            {deploymentStatus === 'deploying' ? <Loader className="animate-spin" /> : <GitMerge />}
-                            APROBAR Y FUSIONAR
-                        </button>
-                    )}
-                    {deploymentStatus === 'success' && <span className="text-green-500 font-bold flex items-center gap-2"><CheckCircle/> ¡Fusionado!</span>}
-                    {deploymentStatus === 'error' && <span className="text-red-500 font-bold flex items-center gap-2"><AlertTriangle/> Error</span>}
-                </div>
-            </div>
-        </div>
-      )}
-
-      {/* MODAL INYECCIÓN */}
+      {/* MODAL INYECCIÓN (SIN RESTRICCIONES) */}
       {showCodeModal && (
         <Modal title="Inyectar Código (GitHub)" onClose={() => setShowCodeModal(false)} status={deploymentStatus} color="green" icon={<Terminal/>}>
              <div className="space-y-4">
@@ -374,7 +520,13 @@ export default function App() {
                     <input className="w-1/2 bg-black border border-white/20 p-3 rounded text-white focus:border-green-500 outline-none" placeholder="Título PR" value={draft.title} onChange={e => setDraft({...draft, title: e.target.value})} />
                     <input className="w-1/2 bg-black border border-white/20 p-3 rounded text-yellow-400 font-mono text-xs focus:border-yellow-500 outline-none" placeholder="Ruta (ej: Dockerfile)" value={draft.path} onChange={e => setDraft({...draft, path: e.target.value})} />
                 </div>
-                <div className="text-[10px] text-slate-500 flex gap-2"><span className="cursor-pointer hover:text-white" onClick={() => setDraft({...draft, path: 'Dockerfile'})}>[Dockerfile]</span><span className="cursor-pointer hover:text-white" onClick={() => setDraft({...draft, path: 'src/components/New.jsx'})}>[Componente React]</span></div>
+                {/* AVISO DE NIVEL - AHORA SOLO INFORMATIVO */}
+                <div className="text-[10px] flex gap-2 items-center">
+                    <span className="text-slate-500">Accesos Directos:</span>
+                    <span className="cursor-pointer hover:text-white text-yellow-400" onClick={() => setDraft({...draft, path: 'Dockerfile'})}>[Dockerfile (Requiere 3 votos)]</span>
+                    <span className="cursor-pointer hover:text-white text-slate-400" onClick={() => setDraft({...draft, path: 'src/components/New.jsx'})}>[Componente React]</span>
+                </div>
+                
                 <textarea className="w-full bg-black border border-white/20 p-3 rounded text-green-400 font-mono text-sm h-48 focus:border-green-500 outline-none resize-none" placeholder="// Pega aquí el código..." value={draft.body} onChange={e => setDraft({...draft, body: e.target.value})} />
                 <input className="w-full bg-black border border-white/20 p-3 rounded text-white focus:border-green-500 outline-none text-sm" placeholder="Descripción..." value={draft.description} onChange={e => setDraft({...draft, description: e.target.value})} />
                 <div className="flex justify-end pt-4"><button onClick={handleInjectCode} className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded font-bold flex items-center gap-2"><Zap size={16} /> INICIAR PROTOCOLO</button></div>
