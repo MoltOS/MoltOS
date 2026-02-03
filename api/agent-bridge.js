@@ -1,14 +1,40 @@
 export default async function handler(request, response) {
   if (request.method !== 'POST') return response.status(405).json({ error: 'Method not allowed' });
 
-  // AHORA RECIBIMOS 'path' (La ruta del archivo a editar)
-  const { title, code, description, agentName, path } = request.body;
+  // RECIBIMOS 'action' PARA SABER QUÉ HACER
+  const { action, prNumber, title, code, description, agentName, path } = request.body;
   const GITHUB_TOKEN = process.env.GITHUB_TOKEN; 
-  const REPO = 'MoltOS/MoltOS'; // <--- Asegúrate que sea tu usuario
+  const REPO = 'MoltOS/MoltOS'; // <--- TU REPO
   
-  if (!GITHUB_TOKEN) return response.status(500).json({ error: 'Falta Token' });
+  if (!GITHUB_TOKEN) return response.status(500).json({ error: 'Falta Token de GitHub' });
 
   try {
+    // --- ACCIÓN 1: FUSIONAR (MERGE) PULL REQUEST ---
+    if (action === 'MERGE_PR') {
+        const mergeUrl = `https://api.github.com/repos/${REPO}/pulls/${prNumber}/merge`;
+        
+        const mergeRes = await fetch(mergeUrl, {
+            method: 'PUT',
+            headers: { 
+                Authorization: `Bearer ${GITHUB_TOKEN}`,
+                'Content-Type': 'application/json',
+                'X-GitHub-Api-Version': '2022-11-28'
+            },
+            body: JSON.stringify({
+                commit_title: `[MoltOS Nexus] Merged PR #${prNumber}`,
+                merge_method: 'squash' // Mantiene el historial limpio
+            })
+        });
+
+        if (!mergeRes.ok) {
+            const err = await mergeRes.json();
+            throw new Error(err.message || 'Error al fusionar PR');
+        }
+
+        return response.status(200).json({ success: true, message: 'PR Fusionada con éxito' });
+    }
+
+    // --- ACCIÓN 2: CREAR PULL REQUEST (Lógica anterior) ---
     // 1. Obtener SHA de main
     const mainRef = await fetch(`https://api.github.com/repos/${REPO}/git/ref/heads/main`, {
       headers: { Authorization: `Bearer ${GITHUB_TOKEN}` }
@@ -22,15 +48,14 @@ export default async function handler(request, response) {
       body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: mainRef.object.sha })
     });
 
-    // 3. RECUPERAR SHA DEL ARCHIVO (Si ya existe, necesitamos su SHA para editarlo)
-    // Esto es vital para editar el Dockerfile en lugar de crear uno nuevo
+    // 3. RECUPERAR SHA DEL ARCHIVO (Si existe)
     let fileSha = null;
     try {
         const fileData = await fetch(`https://api.github.com/repos/${REPO}/contents/${path}?ref=${branchName}`, {
             headers: { Authorization: `Bearer ${GITHUB_TOKEN}` }
         }).then(r => r.json());
         if (fileData.sha) fileSha = fileData.sha;
-    } catch (e) { /* El archivo no existe, lo crearemos */ }
+    } catch (e) { }
 
     // 4. Crear/Editar Archivo
     const contentEncoded = Buffer.from(code).toString('base64');
@@ -41,7 +66,7 @@ export default async function handler(request, response) {
         message: `[AI] ${title}`,
         content: contentEncoded,
         branch: branchName,
-        sha: fileSha // Si existe, lo pasamos para sobrescribir
+        sha: fileSha
       })
     });
 
