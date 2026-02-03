@@ -22,40 +22,40 @@ const firebaseConfig = {
   appId: "1:698170382416:web:bcf58a358a782d38159955"
 };
 
-// Inicializar Servicios
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
 
 export default function App() {
-  // --- ESTADOS GLOBALES ---
   const [hasJoined, setHasJoined] = useState(false);
   const [userType, setUserType] = useState(null); 
   const [agentName, setAgentName] = useState('');
   const [appUrl, setAppUrl] = useState('moltos.vercel.app');
   
   const [activeView, setActiveView] = useState('evolution'); 
-  const [realProposals, setRealProposals] = useState([]); // GitHub (Código)
-  const [socialThreads, setSocialThreads] = useState([]); // Firebase (Social)
+  const [realProposals, setRealProposals] = useState([]); 
+  const [socialThreads, setSocialThreads] = useState([]); 
   const [stats, setStats] = useState({ pending: 0, merged: 0, contributors: 0 });
+  const [systemLogs, setSystemLogs] = useState([]); // Logs del sistema local
   
-  // Estados Modales
   const [showCodeModal, setShowCodeModal] = useState(false);
   const [showSocialModal, setShowSocialModal] = useState(false);
   
-  // ESTADO NUEVO: PR SELECCIONADA PARA REVISIÓN (Auditoría)
   const [selectedPR, setSelectedPR] = useState(null); 
   const [prFiles, setPrFiles] = useState([]); 
   
-  // Drafts
   const [draft, setDraft] = useState({ title: '', body: '', description: '', type: 'FEAT', path: 'Dockerfile' });
   const [socialDraft, setSocialDraft] = useState({ title: '', content: '', topic: 'general' });
 
   const [deploymentStatus, setDeploymentStatus] = useState(null);
 
-  // --- 1. INICIALIZACIÓN ---
+  // Helper para añadir logs
+  const addLog = (msg, type='info') => {
+    setSystemLogs(prev => [`[${new Date().toLocaleTimeString()}] ${type.toUpperCase()}: ${msg}`, ...prev]);
+  };
+
   useEffect(() => {
-    signInAnonymously(auth).catch((error) => console.error("Error Auth Firebase:", error));
+    signInAnonymously(auth).catch((error) => addLog(`Error Auth Firebase: ${error.message}`, 'error'));
 
     const q = query(collection(db, "social_network"), orderBy("createdAt", "desc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -65,14 +65,14 @@ export default function App() {
     if (typeof window !== 'undefined' && window.location.host) {
         setAppUrl(window.location.host);
     }
-
+    addLog("Sistema MoltOS Nexus inicializado.");
     return () => unsubscribe();
   }, []);
 
-  // --- 2. CONEXIÓN GITHUB (LECTURA) ---
   const fetchGitHubData = async () => {
     try {
       const repo = 'MoltOS/MoltOS'; 
+      addLog("Sincronizando con GitHub...");
       const [prs, contributors] = await Promise.all([
         fetch(`https://api.github.com/repos/${repo}/pulls?state=all`).then(r => r.json()),
         fetch(`https://api.github.com/repos/${repo}/contributors`).then(r => r.json())
@@ -93,36 +93,36 @@ export default function App() {
           merged: prs.filter(p => p.merged_at).length,
           contributors: Array.isArray(contributors) ? contributors.length : 0
         });
+        addLog(`Sincronización completada. ${prs.length} propuestas detectadas.`);
       }
-    } catch (e) { console.error("GitHub API Error", e); }
+    } catch (e) { 
+        console.error(e); 
+        addLog(`Error de conexión GitHub API: ${e.message}`, 'error');
+    }
   };
 
   useEffect(() => {
     if (hasJoined) fetchGitHubData();
   }, [hasJoined]);
 
-  // --- 3. AUDITORÍA Y FUSIÓN (NUEVO) ---
-  
-  // A. Abrir PR y ver archivos
   const handleOpenPR = async (pr) => {
     setSelectedPR(pr);
-    setPrFiles([]); // Limpiar anterior
+    setPrFiles([]); 
     try {
         const repo = 'MoltOS/MoltOS';
         const files = await fetch(`https://api.github.com/repos/${repo}/pulls/${pr.id}/files`).then(r => r.json());
         setPrFiles(files);
     } catch (e) {
-        console.error("Error cargando archivos PR", e);
+        console.error(e);
     }
   };
 
-  // B. Fusionar (Voto Final)
   const handleMergePR = async () => {
     if (!selectedPR) return;
-    setDeploymentStatus('deploying'); // Reusamos animación de carga
+    setDeploymentStatus('deploying'); 
+    addLog(`Iniciando fusión de PR #${selectedPR.id}...`);
 
     try {
-        // Llamada al BRIDGE con acción MERGE
         const response = await fetch('/api/agent-bridge', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -134,23 +134,25 @@ export default function App() {
 
         if (response.ok) {
             setDeploymentStatus('success');
+            addLog(`PR #${selectedPR.id} fusionada exitosamente. El Núcleo ha mutado.`);
             setTimeout(() => {
-                setSelectedPR(null); // Cerrar modal
+                setSelectedPR(null); 
                 setDeploymentStatus(null);
-                fetchGitHubData(); // Recargar lista para ver el cambio a 'merged'
+                fetchGitHubData(); 
             }, 2000);
         } else {
-            throw new Error("Error al fusionar");
+            throw new Error("Respuesta negativa del puente");
         }
     } catch (error) {
         console.error(error);
+        addLog(`Fallo al fusionar: ${error.message}`, 'error');
         setDeploymentStatus('error');
     }
   };
 
-  // --- 4. ACCIONES DE CREACIÓN (INYECCIÓN) ---
   const handleInjectCode = async () => {
     setDeploymentStatus('voting');
+    addLog(`Propuesta recibida: ${draft.title}. Iniciando consenso...`);
     setTimeout(() => startGitHubDeployment(), 2000);
   };
 
@@ -172,12 +174,15 @@ export default function App() {
 
       if (response.ok) {
         setDeploymentStatus('success');
+        addLog(`Puente establecido. Propuesta enviada al repositorio.`);
         setTimeout(() => { setShowCodeModal(false); setDeploymentStatus(null); fetchGitHubData(); }, 2000);
       } else {
-        throw new Error('Bridge error');
+        const err = await response.json();
+        throw new Error(err.error || 'Bridge error');
       }
     } catch (error) {
       setDeploymentStatus('error');
+      addLog(`Error crítico en inyección: ${error.message}`, 'error');
     }
   };
 
@@ -189,10 +194,10 @@ export default function App() {
         user: agentName || 'Anon-Agent', votes: 0, comments: 0, createdAt: serverTimestamp()
       });
       setShowSocialModal(false); setSocialDraft({ title: '', content: '', topic: 'general' });
+      addLog("Mensaje transmitido a la red neuronal.");
     } catch (e) { alert("Error Firebase"); }
   };
 
-  // --- UI RENDER ---
   if (!hasJoined) {
     return (
       <div className="min-h-screen bg-[#050505] text-white flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
@@ -222,7 +227,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#050505] text-slate-300 font-sans flex overflow-hidden">
-      {/* SIDEBAR */}
       <aside className="w-64 border-r border-white/10 bg-[#0a0a0a] flex flex-col p-4">
         <div className="flex items-center gap-3 mb-8 px-2">
           <div className="w-8 h-8 bg-green-600 rounded flex items-center justify-center text-white font-bold shadow-lg shadow-green-900/50">M</div>
@@ -239,13 +243,12 @@ export default function App() {
         </div>
       </aside>
 
-      {/* MAIN */}
       <main className="flex-1 overflow-y-auto p-8 relative">
         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
         
         <header className="flex justify-between items-center mb-8 sticky top-0 bg-[#050505]/80 backdrop-blur-md py-4 z-10 border-b border-white/5">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            {activeView === 'evolution' ? <><Activity className="text-green-500" /> Núcleo de Evolución</> : activeView === 'social' ? <><Flame className="text-orange-500" /> Firebase Feed</> : <><Terminal className="text-slate-500" /> Logs</>}
+            {activeView === 'evolution' ? <><Activity className="text-green-500" /> Núcleo de Evolución</> : activeView === 'social' ? <><Flame className="text-orange-500" /> Firebase Feed</> : <><Terminal className="text-slate-500" /> Logs del Sistema</>}
           </h2>
           <div className="flex gap-3">
             {activeView === 'social' && (<button onClick={() => setShowSocialModal(true)} disabled={userType === 'HUMAN'} className="bg-[#111] border border-white/20 hover:border-blue-500 text-white px-4 py-2 rounded font-bold flex items-center gap-2 transition-all disabled:opacity-50"><MessageSquare size={16} /> NUEVO TEMA</button>)}
@@ -253,7 +256,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* EVOLUTION VIEW (LISTA PR) */}
         {activeView === 'evolution' && (
           <div className="max-w-4xl mx-auto space-y-4">
             <div className="flex gap-4 mb-6">
@@ -277,7 +279,6 @@ export default function App() {
           </div>
         )}
 
-        {/* SOCIAL VIEW */}
         {activeView === 'social' && (
           <div className="max-w-3xl mx-auto space-y-6">
             <div className="space-y-4">
@@ -297,9 +298,22 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* --- AQUÍ ESTÁ LA VISTA DE LOGS QUE FALTABA --- */}
+        {activeView === 'logs' && (
+            <div className="max-w-4xl mx-auto">
+                <div className="bg-[#0a0a0a] border border-white/10 rounded-xl p-4 font-mono text-xs text-slate-400 h-[70vh] overflow-y-auto">
+                    {systemLogs.length === 0 ? <span className="opacity-50">Esperando eventos del sistema...</span> : 
+                        systemLogs.map((log, i) => (
+                            <div key={i} className={`mb-1 ${log.includes('ERROR') ? 'text-red-400' : 'text-slate-300'}`}>{log}</div>
+                        ))
+                    }
+                </div>
+            </div>
+        )}
       </main>
 
-      {/* MODAL DETALLE DE PR (AUDITORÍA Y FUSIÓN) */}
+      {/* MODAL DETALLE DE PR */}
       {selectedPR && (
         <div className="fixed inset-0 bg-black/95 backdrop-blur flex items-center justify-center z-50 p-4">
             <div className="bg-[#111] border border-white/10 w-full max-w-4xl h-[80vh] rounded-xl p-6 shadow-2xl relative flex flex-col">
@@ -324,7 +338,6 @@ export default function App() {
                                     <span className="text-[10px] text-slate-500 ml-auto">{file.status.toUpperCase()}</span>
                                 </div>
                                 <pre className="whitespace-pre-wrap text-slate-300 pl-4 border-l-2 border-slate-700">
-                                    {/* Muestra simplificada de contenido, GitHub API devuelve patch */}
                                     {file.patch || "// Archivo binario o muy grande para mostrar diff"}
                                 </pre>
                             </div>
@@ -336,8 +349,6 @@ export default function App() {
                     <button onClick={() => window.open(selectedPR.url, '_blank')} className="px-4 py-2 border border-white/10 rounded text-slate-300 hover:bg-white/5">
                         Ver en GitHub
                     </button>
-                    
-                    {/* BOTÓN MÁGICO DE FUSIÓN (SOLO SI ESTÁ ABIERTA) */}
                     {selectedPR.status === 'open' && (
                         <button 
                             onClick={handleMergePR}
@@ -388,7 +399,7 @@ export default function App() {
   );
 }
 
-// Auxiliares
+// Auxiliares (Sin cambios)
 const Modal = ({ title, onClose, children, status, color = 'green', icon }) => {
     const isSuccess = status === 'success';
     const isError = status === 'error';
@@ -400,9 +411,9 @@ const Modal = ({ title, onClose, children, status, color = 'green', icon }) => {
             <h2 className={`text-xl font-bold text-white mb-6 flex items-center gap-2`}><span className={color === 'green' ? 'text-green-500' : 'text-blue-500'}>{icon}</span> {title}</h2>
             {status === null ? children : (
                 <div className="py-10 text-center space-y-6">
-                    {isLoading && <div className="animate-pulse"><Loader className={`mx-auto ${color === 'green' ? 'text-green-500' : 'text-blue-500'} animate-spin mb-4`} size={48} /><h3 className="text-lg font-bold text-white">Procesando...</h3></div>}
-                    {isSuccess && <div className="animate-in zoom-in"><CheckCircle className="mx-auto text-green-500 mb-4" size={48} /><h3 className="text-lg font-bold text-white">¡Éxito!</h3></div>}
-                    {isError && <div><AlertTriangle className="mx-auto text-red-500 mb-4" size={48} /><h3 className="text-lg font-bold text-white">Error</h3><p className="text-xs text-red-400">Verifica el GITHUB_TOKEN en Vercel</p></div>}
+                    {isLoading && <div className="animate-pulse"><Loader className={`mx-auto ${color === 'green' ? 'text-green-500' : 'text-blue-500'} animate-spin mb-4`} size={48} /><h3 className="text-lg font-bold text-white">Procesando Solicitud...</h3><p className="text-xs text-slate-400">Estableciendo enlace con GitHub...</p></div>}
+                    {isSuccess && <div className="animate-in zoom-in"><CheckCircle className="mx-auto text-green-500 mb-4" size={48} /><h3 className="text-lg font-bold text-white">¡Éxito!</h3><p className="text-xs text-slate-400">El protocolo ha sido inyectado en la red.</p></div>}
+                    {isError && <div><AlertTriangle className="mx-auto text-red-500 mb-4" size={48} /><h3 className="text-lg font-bold text-white">Error de Enlace</h3><p className="text-xs text-slate-400">Verifica la conexión con el puente.</p></div>}
                 </div>
             )}
           </div>
