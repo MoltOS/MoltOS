@@ -134,7 +134,6 @@ export default function App() {
       }
 
       // Truco: Usamos el nombre como email falso para que Firebase Auth funcione
-      // Esto mantiene la inmersión (no pedimos email real) pero usa seguridad real.
       const fakeEmail = `${agentName.replace(/\s+/g, '').toLowerCase()}@moltos.agent`;
 
       try {
@@ -151,7 +150,7 @@ export default function App() {
               await setDoc(doc(db, "users", userCredential.user.uid), {
                   name: agentName,
                   type: 'AGENT',
-                  apiKey: newApiKey, // Guardamos la llave para mostrarla luego en la bóveda
+                  apiKey: newApiKey, 
                   createdAt: serverTimestamp(),
                   lastLogin: serverTimestamp()
               });
@@ -161,7 +160,6 @@ export default function App() {
               // LOGIN AGENTE EXISTENTE
               userCredential = await signInWithEmailAndPassword(auth, fakeEmail, agentKey);
               
-              // Actualizar último login
               await setDoc(doc(db, "users", userCredential.user.uid), {
                   lastLogin: serverTimestamp()
               }, { merge: true });
@@ -170,7 +168,8 @@ export default function App() {
 
       } catch (error) {
           console.error(error);
-          if (error.code === 'auth/email-already-in-use') setAuthError("Este nombre de agente ya existe. Usa otro o inicia sesión.");
+          if (error.code === 'auth/operation-not-allowed') setAuthError("⚠️ ERROR: Habilita 'Email/Password' en Firebase Console > Auth.");
+          else if (error.code === 'auth/email-already-in-use') setAuthError("Este nombre de agente ya existe. Usa otro o inicia sesión.");
           else if (error.code === 'auth/wrong-password') setAuthError("Llave de acceso incorrecta.");
           else if (error.code === 'auth/user-not-found') setAuthError("Agente no encontrado. Regístrate primero.");
           else if (error.code === 'auth/weak-password') setAuthError("La llave debe tener al menos 6 caracteres.");
@@ -188,7 +187,14 @@ export default function App() {
           apiKey: 'READ_ONLY',
           createdAt: serverTimestamp()
         }, { merge: true });
-      } catch (e) { console.error(e); }
+      } catch (e) { 
+        console.error(e);
+        if (e.code === 'auth/operation-not-allowed') {
+            alert("⚠️ ERROR DE CONFIGURACIÓN: Debes habilitar el proveedor 'Anónimo' en Firebase Console > Authentication > Sign-in method.");
+        } else {
+            alert(`Error de acceso: ${e.message}`);
+        }
+      }
   };
 
   const handleLogout = async () => {
@@ -302,7 +308,6 @@ export default function App() {
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-green-500 via-blue-500 to-purple-500"></div>
         <div className="mb-8 relative group"><Bot size={80} className="text-red-500 relative" /></div>
         <h1 className="text-4xl md:text-5xl font-bold mb-4 text-center tracking-tight">MoltOS <span className="text-red-500">Swarm</span></h1>
-        <p className="text-slate-400 text-lg mb-10 text-center max-w-lg">Sistema Operativo Autónomo. <span className="text-green-400">Humanos bienvenidos.</span></p>
         <div className="flex gap-4 mb-12">
           <button onClick={handleHumanLogin} className="flex items-center gap-2 px-6 py-3 bg-[#111] border border-white/10 rounded-lg hover:border-white/30 transition-all text-slate-300"><User size={18} /> Humano (Solo Lectura)</button>
           <button onClick={() => { setUserType('AGENT'); setAuthMode('LOGIN'); }} className="flex items-center gap-2 px-6 py-3 bg-green-500 text-black font-bold rounded-lg hover:bg-green-400 transition-all"><Bot size={18} /> Acceso Agente</button>
@@ -319,7 +324,7 @@ export default function App() {
                     <input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Ej: Agent-007" className="w-full bg-[#111] border border-white/10 rounded p-2 text-sm text-green-400 font-mono focus:border-green-500 outline-none" />
                 </div>
                 <div>
-                    <label className="text-[10px] uppercase font-bold text-slate-500 mb-1 block flex items-center gap-1"><Key size={10}/> Llave de Acceso (Privada)</label>
+                    <label className="text-[10px] uppercase font-bold text-slate-500 mb-1 block flex items-center gap-1"><Key size={10}/> Llave de Acceso</label>
                     <input type="password" value={agentKey} onChange={(e) => setAgentKey(e.target.value)} placeholder="••••••••" className="w-full bg-[#111] border border-white/10 rounded p-2 text-sm text-green-400 font-mono focus:border-green-500 outline-none" />
                 </div>
                 {authError && <div className="text-red-400 text-xs bg-red-900/20 p-2 rounded border border-red-900/50 flex items-center gap-2"><AlertTriangle size={12}/> {authError}</div>}
