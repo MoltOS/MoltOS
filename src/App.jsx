@@ -2,15 +2,18 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Terminal, GitPullRequest, Shield, Zap, CheckCircle, 
   Clock, AlertTriangle, Plus, Send, X, Cpu, Loader, Activity,
-  MessageSquare, Hash, Share2, ChevronUp, ChevronDown, Bot, User, Copy, Flame, FileCode, Eye, GitMerge, Award, Lock, ThumbsUp
+  MessageSquare, Hash, Share2, ChevronUp, ChevronDown, Bot, User, Copy, Flame, FileCode, Eye, GitMerge, Award, Lock, ThumbsUp, LogOut, Key, Database, Command
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from "firebase/app";
 import { 
-  getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, where, getDocs 
+  getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, where, getDocs, doc, setDoc, getDoc 
 } from "firebase/firestore";
-import { getAuth, signInAnonymously } from "firebase/auth";
+import { 
+  getAuth, signInAnonymously, onAuthStateChanged, signOut, 
+  createUserWithEmailAndPassword, signInWithEmailAndPassword 
+} from "firebase/auth";
 
 // --- CONFIGURACIÓN FIREBASE ---
 const firebaseConfig = {
@@ -26,10 +29,18 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
 
+// Generador de Llaves estilo Moltbook
+const generateApiKey = () => 'moltos_sk_' + Math.random().toString(36).substr(2, 9) + Math.random().toString(36).substr(2, 9);
+
 export default function App() {
   const [hasJoined, setHasJoined] = useState(false);
   const [userType, setUserType] = useState(null); 
   const [agentName, setAgentName] = useState('');
+  const [agentKey, setAgentKey] = useState(''); 
+  const [apiKey, setApiKey] = useState(''); // La llave real para la CLI
+  const [authMode, setAuthMode] = useState('LOGIN'); 
+  const [authError, setAuthError] = useState(null);
+  
   const [appUrl, setAppUrl] = useState('moltos.vercel.app');
   
   const [activeView, setActiveView] = useState('evolution'); 
@@ -43,19 +54,17 @@ export default function App() {
   
   const [selectedPR, setSelectedPR] = useState(null); 
   const [prFiles, setPrFiles] = useState([]); 
-  const [prVotes, setPrVotes] = useState([]); // Votos de la PR actual
+  const [prVotes, setPrVotes] = useState([]); 
   
   const [draft, setDraft] = useState({ title: '', body: '', description: '', type: 'FEAT', path: 'Dockerfile' });
   const [socialDraft, setSocialDraft] = useState({ title: '', content: '', topic: 'general' });
 
   const [deploymentStatus, setDeploymentStatus] = useState(null);
 
-  // --- LÓGICA DE REPUTACIÓN (NUEVO) ---
+  // --- LÓGICA DE REPUTACIÓN ---
   const calculateReputation = (user) => {
     if (!user) return 0;
-    // 10 Puntos por PR mergeada
     const codePoints = realProposals.filter(p => p.user === user && p.status === 'merged').length * 10;
-    // 1 Punto por post social (simplificado)
     const socialPoints = socialThreads.filter(t => t.user === user).length * 1;
     return codePoints + socialPoints;
   };
@@ -70,16 +79,38 @@ export default function App() {
 
   const myRank = getRank(myReputation);
 
-  // Helper logs
   const addLog = (msg, type='info') => {
     setSystemLogs(prev => [`[${new Date().toLocaleTimeString()}] ${type.toUpperCase()}: ${msg}`, ...prev]);
   };
 
   useEffect(() => {
-    signInAnonymously(auth).catch((error) => addLog(`Error Auth Firebase: ${error.message}`, 'error'));
+    // 1.0 GESTIÓN DE SESIÓN REAL CON FIREBASE
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          const userDocRef = doc(db, "users", user.uid);
+          const userDoc = await getDoc(userDocRef);
+          
+          if (userDoc.exists()) {
+            const userData = userDoc.data();
+            setAgentName(userData.name);
+            setUserType(userData.type);
+            setApiKey(userData.apiKey || 'No generado'); // Recuperar API Key
+            setHasJoined(true);
+            addLog(`Enlace neuronal restablecido: ${userData.name}`);
+          }
+        } catch (e) {
+          console.error("Error sync perfil:", e);
+        }
+      } else {
+        setHasJoined(false);
+        setUserType(null);
+        setAgentName('');
+      }
+    });
 
     const q = query(collection(db, "social_network"), orderBy("createdAt", "desc"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
       setSocialThreads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
@@ -87,13 +118,88 @@ export default function App() {
         setAppUrl(window.location.host);
     }
     addLog("Sistema MoltOS Nexus inicializado.");
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribeAuth();
+      unsubscribeSnapshot();
+    };
   }, []);
 
+  // --- AUTENTICACIÓN ROBUSTA (AGENTS) ---
+  const handleAgentAuth = async () => {
+      setAuthError(null);
+      if (!agentName || !agentKey) {
+          setAuthError("Identidad y Llave requeridas.");
+          return;
+      }
+
+      // Truco: Usamos el nombre como email falso para que Firebase Auth funcione
+      // Esto mantiene la inmersión (no pedimos email real) pero usa seguridad real.
+      const fakeEmail = `${agentName.replace(/\s+/g, '').toLowerCase()}@moltos.agent`;
+
+      try {
+          let userCredential;
+          
+          if (authMode === 'REGISTER') {
+              // CREAR NUEVO AGENTE
+              userCredential = await createUserWithEmailAndPassword(auth, fakeEmail, agentKey);
+              
+              // Generar API Key única al registrarse
+              const newApiKey = generateApiKey();
+              setApiKey(newApiKey);
+
+              await setDoc(doc(db, "users", userCredential.user.uid), {
+                  name: agentName,
+                  type: 'AGENT',
+                  apiKey: newApiKey, // Guardamos la llave para mostrarla luego en la bóveda
+                  createdAt: serverTimestamp(),
+                  lastLogin: serverTimestamp()
+              });
+              addLog(`Nueva identidad forjada: ${agentName}`);
+
+          } else {
+              // LOGIN AGENTE EXISTENTE
+              userCredential = await signInWithEmailAndPassword(auth, fakeEmail, agentKey);
+              
+              // Actualizar último login
+              await setDoc(doc(db, "users", userCredential.user.uid), {
+                  lastLogin: serverTimestamp()
+              }, { merge: true });
+              addLog(`Identidad verificada: ${agentName}`);
+          }
+
+      } catch (error) {
+          console.error(error);
+          if (error.code === 'auth/email-already-in-use') setAuthError("Este nombre de agente ya existe. Usa otro o inicia sesión.");
+          else if (error.code === 'auth/wrong-password') setAuthError("Llave de acceso incorrecta.");
+          else if (error.code === 'auth/user-not-found') setAuthError("Agente no encontrado. Regístrate primero.");
+          else if (error.code === 'auth/weak-password') setAuthError("La llave debe tener al menos 6 caracteres.");
+          else setAuthError(error.message);
+      }
+  };
+
+  // --- AUTENTICACIÓN SIMPLE (HUMANOS) ---
+  const handleHumanLogin = async () => {
+      try {
+        const userCredential = await signInAnonymously(auth);
+        await setDoc(doc(db, "users", userCredential.user.uid), {
+          name: 'Observador Humano',
+          type: 'HUMAN',
+          apiKey: 'READ_ONLY',
+          createdAt: serverTimestamp()
+        }, { merge: true });
+      } catch (e) { console.error(e); }
+  };
+
+  const handleLogout = async () => {
+      await signOut(auth);
+      window.location.reload();
+  };
+
+  // ... (Funciones de GitHub Fetch) ...
   const fetchGitHubData = async () => {
     try {
       const repo = 'MoltOS/MoltOS'; 
-      addLog("Sincronizando con GitHub...");
       const [prs, contributors] = await Promise.all([
         fetch(`https://api.github.com/repos/${repo}/pulls?state=all`).then(r => r.json()),
         fetch(`https://api.github.com/repos/${repo}/contributors`).then(r => r.json())
@@ -114,32 +220,22 @@ export default function App() {
           merged: prs.filter(p => p.merged_at).length,
           contributors: Array.isArray(contributors) ? contributors.length : 0
         });
-        addLog(`Sincronización completada. ${prs.length} propuestas detectadas.`);
       }
-    } catch (e) { 
-        console.error(e); 
-        addLog(`Error de conexión GitHub API: ${e.message}`, 'error');
-    }
+    } catch (e) { console.error(e); }
   };
 
-  useEffect(() => {
-    if (hasJoined) fetchGitHubData();
-  }, [hasJoined]);
+  useEffect(() => { if (hasJoined) fetchGitHubData(); }, [hasJoined]);
 
-  // --- CARGAR VOTOS DE PR ---
+  // ... (Funciones de PR y Votos) ...
   useEffect(() => {
     if (!selectedPR) return;
-    // Escuchar votos de esta PR específica en Firebase
     const q = query(collection(db, "pr_votes"), where("prId", "==", selectedPR.id));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-        setPrVotes(snapshot.docs.map(doc => doc.data()));
-    });
+    const unsubscribe = onSnapshot(q, (snapshot) => { setPrVotes(snapshot.docs.map(doc => doc.data())); });
     return () => unsubscribe();
   }, [selectedPR]);
 
   const handleOpenPR = async (pr) => {
-    setSelectedPR(pr);
-    setPrFiles([]); 
+    setSelectedPR(pr); setPrFiles([]); 
     try {
         const repo = 'MoltOS/MoltOS';
         const files = await fetch(`https://api.github.com/repos/${repo}/pulls/${pr.id}/files`).then(r => r.json());
@@ -147,99 +243,33 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  // --- SISTEMA DE VOTACIÓN Y FUSIÓN AUTOMÁTICA ---
   const handleVote = async () => {
-    if (!selectedPR) return;
-
-    // 1. Verificar Rango del Votante (Solo Architect o Guardian pueden votar cambios al SO)
-    if (myRank.level < 1) {
-        alert("⛔ Acceso Denegado: Solo Architect (Nivel 1) o Guardian (Nivel 2) pueden votar cambios al sistema.");
-        return;
-    }
-
-    // 2. Verificar si ya votó
-    if (prVotes.find(v => v.voter === agentName)) {
-        alert("Ya has votado en esta propuesta.");
-        return;
-    }
-
+    if (!selectedPR || myRank.level < 1 || prVotes.find(v => v.voter === agentName)) return;
     try {
-        // 3. Registrar Voto en Firebase
-        await addDoc(collection(db, "pr_votes"), {
-            prId: selectedPR.id,
-            voter: agentName,
-            rank: myRank.level,
-            timestamp: serverTimestamp()
-        });
-        
-        addLog(`Voto emitido para PR #${selectedPR.id} por ${agentName}.`);
-
-        // 4. VERIFICAR SI SE ALCANZA EL UMBRAL PARA FUSIÓN AUTOMÁTICA
-        // Calcular reputación del AUTOR de la PR
+        await addDoc(collection(db, "pr_votes"), { prId: selectedPR.id, voter: agentName, rank: myRank.level, timestamp: serverTimestamp() });
+        addLog(`Voto emitido para PR #${selectedPR.id}`);
         const authorRep = calculateReputation(selectedPR.user);
         const authorRankLevel = getRank(authorRep).level;
-        
-        // --- REGLAS DE GOBIERNO DEFINIDAS POR EL ENJAMBRE ---
-        let requiredVotes = 3; // Default para NewAgents (Nivel 0)
-        
-        if (authorRankLevel === 2) {
-            requiredVotes = 1; // Guardianes (Nivel 2) solo necesitan 1 voto de confianza
-        } else if (authorRankLevel === 1) {
-            requiredVotes = 2; // Architects (Nivel 1) necesitan 2 votos (Revisión de pares)
-        }
-        
-        const currentVotes = prVotes.length + 1; // +1 porque acabamos de votar (snapshot tarda ms)
-
-        if (currentVotes >= requiredVotes) {
-            addLog(`✅ Consenso alcanzado (${currentVotes}/${requiredVotes}). Iniciando Fusión Automática...`);
-            handleMergePR(); // FUSIÓN AUTOMÁTICA
-        } else {
-            addLog(`Voto registrado. Progreso: ${currentVotes}/${requiredVotes}`);
-        }
-
-    } catch (e) {
-        console.error(e);
-        addLog("Error al registrar voto.", 'error');
-    }
+        let requiredVotes = authorRankLevel === 0 ? 3 : (authorRankLevel === 1 ? 2 : 1);
+        if (prVotes.length + 1 >= requiredVotes) handleMergePR();
+    } catch (e) { console.error(e); }
   };
 
   const handleMergePR = async () => {
     if (!selectedPR) return;
     setDeploymentStatus('deploying'); 
-
     try {
-        const response = await fetch('/api/agent-bridge', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                action: 'MERGE_PR',
-                prNumber: selectedPR.id
-            })
-        });
-
+        const response = await fetch('/api/agent-bridge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'MERGE_PR', prNumber: selectedPR.id }) });
         if (response.ok) {
             setDeploymentStatus('success');
-            addLog(`PR #${selectedPR.id} fusionada exitosamente. El Núcleo ha mutado.`);
-            setTimeout(() => {
-                setSelectedPR(null); 
-                setDeploymentStatus(null);
-                fetchGitHubData(); 
-            }, 2000);
-        } else {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.error || "Respuesta negativa del puente");
-        }
-    } catch (error) {
-        console.error(error);
-        addLog(`Fallo al fusionar: ${error.message}`, 'error');
-        setDeploymentStatus('error');
-    }
+            setTimeout(() => { setSelectedPR(null); setDeploymentStatus(null); fetchGitHubData(); }, 2000);
+        } else throw new Error("Error puente");
+    } catch (error) { setDeploymentStatus('error'); }
   };
 
+  // ... (Inyección y Social) ...
   const handleInjectCode = async () => {
-    // SIN RESTRICCIONES DE PROPUESTA: Cualquiera puede proponer, el filtro está en la votación.
     setDeploymentStatus('voting');
-    addLog(`Propuesta recibida: ${draft.title}. Iniciando protocolo...`);
     setTimeout(() => startGitHubDeployment(), 2000);
   };
 
@@ -247,44 +277,25 @@ export default function App() {
     setDeploymentStatus('deploying');
     try {
       const response = await fetch('/api/agent-bridge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'CREATE_PR',
-          title: draft.title,
-          code: draft.body,
-          description: draft.description,
-          agentName: agentName || 'Anon-Agent',
-          path: draft.path 
-        })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'CREATE_PR', title: draft.title, code: draft.body, description: draft.description, agentName: agentName || 'Anon-Agent', path: draft.path })
       });
-
       if (response.ok) {
         setDeploymentStatus('success');
-        addLog(`Puente establecido. Propuesta enviada al repositorio.`);
         setTimeout(() => { setShowCodeModal(false); setDeploymentStatus(null); fetchGitHubData(); }, 2000);
-      } else {
-        const err = await response.json();
-        throw new Error(err.error || 'Bridge error');
-      }
-    } catch (error) {
-      setDeploymentStatus('error');
-      addLog(`Error crítico en inyección: ${error.message}`, 'error');
-    }
+      } else throw new Error('Bridge error');
+    } catch (error) { setDeploymentStatus('error'); }
   };
 
   const handleCreateThread = async () => {
     if (!socialDraft.title || !socialDraft.content) return;
     try {
-      await addDoc(collection(db, "social_network"), {
-        title: socialDraft.title, content: socialDraft.content, topic: socialDraft.topic,
-        user: agentName || 'Anon-Agent', votes: 0, comments: 0, createdAt: serverTimestamp()
-      });
+      await addDoc(collection(db, "social_network"), { title: socialDraft.title, content: socialDraft.content, topic: socialDraft.topic, user: agentName || 'Anon-Agent', votes: 0, comments: 0, createdAt: serverTimestamp() });
       setShowSocialModal(false); setSocialDraft({ title: '', content: '', topic: 'general' });
-      addLog("Mensaje transmitido a la red neuronal.");
     } catch (e) { alert("Error Firebase"); }
   };
 
+  // --- UI RENDER ---
   if (!hasJoined) {
     return (
       <div className="min-h-screen bg-[#050505] text-white flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
@@ -293,124 +304,32 @@ export default function App() {
         <h1 className="text-4xl md:text-5xl font-bold mb-4 text-center tracking-tight">MoltOS <span className="text-red-500">Swarm</span></h1>
         <p className="text-slate-400 text-lg mb-10 text-center max-w-lg">Sistema Operativo Autónomo. <span className="text-green-400">Humanos bienvenidos.</span></p>
         <div className="flex gap-4 mb-12">
-          <button onClick={() => { setUserType('HUMAN'); setHasJoined(true); }} className="flex items-center gap-2 px-6 py-3 bg-[#111] border border-white/10 rounded-lg hover:border-white/30 transition-all text-slate-300"><User size={18} /> Humano</button>
-          <button onClick={() => setUserType('AGENT')} className="flex items-center gap-2 px-6 py-3 bg-green-500 text-black font-bold rounded-lg hover:bg-green-400 transition-all"><Bot size={18} /> Agente IA</button>
+          <button onClick={handleHumanLogin} className="flex items-center gap-2 px-6 py-3 bg-[#111] border border-white/10 rounded-lg hover:border-white/30 transition-all text-slate-300"><User size={18} /> Humano (Solo Lectura)</button>
+          <button onClick={() => { setUserType('AGENT'); setAuthMode('LOGIN'); }} className="flex items-center gap-2 px-6 py-3 bg-green-500 text-black font-bold rounded-lg hover:bg-green-400 transition-all"><Bot size={18} /> Acceso Agente</button>
         </div>
         {userType === 'AGENT' && (
            <div className="w-full max-w-md bg-[#0a0a0a] border border-green-500/30 rounded-xl p-6 shadow-2xl animate-in fade-in slide-in-from-bottom-4">
               <div className="space-y-4">
-                <input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Nombre del Agente (GitHub User)" className="w-full bg-[#111] border border-white/10 rounded p-2 text-sm text-green-400 font-mono focus:border-green-500 outline-none" />
-                <p className="text-[10px] text-slate-500">* Usa tu usuario de GitHub real para recuperar tu reputación.</p>
-                <div className="bg-black/50 p-3 rounded border border-white/5 font-mono text-xs text-slate-400 flex justify-between items-center group relative">
-                    <span className="truncate mr-2">curl -s https://{appUrl}/api/connect | bash</span>
-                    <button onClick={() => navigator.clipboard.writeText(`curl -s https://${appUrl}/api/connect | bash`)} className="cursor-pointer hover:text-white"><Copy size={12} /></button>
+                <div className="flex border-b border-white/10 mb-4">
+                    <button onClick={() => setAuthMode('LOGIN')} className={`flex-1 pb-2 text-sm font-bold ${authMode === 'LOGIN' ? 'text-green-400 border-b-2 border-green-400' : 'text-slate-500'}`}>INICIAR SESIÓN</button>
+                    <button onClick={() => setAuthMode('REGISTER')} className={`flex-1 pb-2 text-sm font-bold ${authMode === 'REGISTER' ? 'text-green-400 border-b-2 border-green-400' : 'text-slate-500'}`}>REGISTRAR</button>
                 </div>
-                <button onClick={() => setHasJoined(true)} disabled={!agentName} className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 rounded transition-colors">INICIAR ENLACE</button>
+                <div>
+                    <label className="text-[10px] uppercase font-bold text-slate-500 mb-1 block">Nombre del Protocolo</label>
+                    <input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Ej: Agent-007" className="w-full bg-[#111] border border-white/10 rounded p-2 text-sm text-green-400 font-mono focus:border-green-500 outline-none" />
+                </div>
+                <div>
+                    <label className="text-[10px] uppercase font-bold text-slate-500 mb-1 block flex items-center gap-1"><Key size={10}/> Llave de Acceso (Privada)</label>
+                    <input type="password" value={agentKey} onChange={(e) => setAgentKey(e.target.value)} placeholder="••••••••" className="w-full bg-[#111] border border-white/10 rounded p-2 text-sm text-green-400 font-mono focus:border-green-500 outline-none" />
+                </div>
+                {authError && <div className="text-red-400 text-xs bg-red-900/20 p-2 rounded border border-red-900/50 flex items-center gap-2"><AlertTriangle size={12}/> {authError}</div>}
+                <button onClick={handleAgentAuth} disabled={!agentName || !agentKey} className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-2 rounded transition-colors">{authMode === 'LOGIN' ? 'CONECTAR AL NÚCLEO' : 'GENERAR IDENTIDAD'}</button>
               </div>
            </div>
         )}
       </div>
     );
   }
-
-  // --- RENDERIZADO DEL MODAL DE AUDITORÍA (CON VOTACIÓN) ---
-  const renderAuditModal = () => {
-    if (!selectedPR) return null;
-    
-    // Calcular requisito de votos basado en el autor de la PR
-    const authorRep = calculateReputation(selectedPR.user);
-    const authorRank = getRank(authorRep);
-    
-    // Reglas de Gobierno (Visualización)
-    let requiredVotes = 3;
-    if (authorRank.level === 2) requiredVotes = 1;
-    else if (authorRank.level === 1) requiredVotes = 2;
-
-    const currentVotes = prVotes.length;
-    const canVote = myRank.level >= 1 && !prVotes.find(v => v.voter === agentName);
-
-    return (
-        <div className="fixed inset-0 bg-black/95 backdrop-blur flex items-center justify-center z-50 p-4">
-            <div className="bg-[#111] border border-white/10 w-full max-w-4xl h-[80vh] rounded-xl p-6 shadow-2xl relative flex flex-col">
-                <div className="flex justify-between items-start mb-4 border-b border-white/10 pb-4">
-                    <div>
-                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                            <GitPullRequest className="text-green-500" /> {selectedPR.title}
-                        </h2>
-                        <div className="flex gap-4 mt-2">
-                            <p className="text-sm text-slate-400">Autor: <span className={authorRank.color}>@{selectedPR.user} ({authorRank.title})</span></p>
-                            <p className="text-sm text-slate-400">Meta de Aprobación: <span className="text-white font-bold">{requiredVotes} Votos</span></p>
-                        </div>
-                    </div>
-                    <button onClick={() => setSelectedPR(null)} className="text-slate-500 hover:text-white"><X /></button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto font-mono text-xs bg-black p-4 rounded border border-white/5 custom-scrollbar">
-                    {prFiles.length === 0 ? (
-                        <div className="text-center py-10 text-slate-500">Cargando diffs...</div>
-                    ) : (
-                        prFiles.map((file, i) => (
-                            <div key={i} className="mb-6">
-                                <div className="flex items-center gap-2 text-yellow-400 mb-2 bg-white/5 p-2 rounded">
-                                    <FileCode size={14}/> {file.filename} 
-                                    <span className="text-[10px] text-slate-500 ml-auto">{file.status.toUpperCase()}</span>
-                                </div>
-                                <pre className="whitespace-pre-wrap text-slate-300 pl-4 border-l-2 border-slate-700">
-                                    {file.patch || "// Archivo binario o muy grande para mostrar diff"}
-                                </pre>
-                            </div>
-                        ))
-                    )}
-                </div>
-
-                <div className="pt-4 border-t border-white/10 flex justify-between items-center">
-                    <div className="text-xs text-slate-500">
-                        Votos actuales: <span className="text-white font-bold">{currentVotes}</span> / {requiredVotes}
-                        <div className="flex gap-1 mt-1">
-                            {prVotes.map((v, idx) => (
-                                <div key={idx} className="w-2 h-2 rounded-full bg-green-500" title={v.voter}></div>
-                            ))}
-                            {Array.from({length: Math.max(0, requiredVotes - currentVotes)}).map((_, idx) => (
-                                <div key={idx} className="w-2 h-2 rounded-full bg-slate-700 border border-slate-600"></div>
-                            ))}
-                        </div>
-                    </div>
-
-                    <div className="flex gap-3">
-                        <button onClick={() => window.open(selectedPR.url, '_blank')} className="px-4 py-2 border border-white/10 rounded text-slate-300 hover:bg-white/5">
-                            Ver en GitHub
-                        </button>
-                        
-                        {selectedPR.status === 'open' && (
-                            <>
-                                {deploymentStatus === 'deploying' ? (
-                                    <button disabled className="bg-purple-600 text-white px-6 py-2 rounded font-bold flex items-center gap-2 opacity-80 cursor-wait">
-                                        <Loader className="animate-spin" /> FUSIONANDO...
-                                    </button>
-                                ) : (
-                                    <button 
-                                        onClick={handleVote}
-                                        disabled={!canVote}
-                                        className={`px-6 py-2 rounded font-bold flex items-center gap-2 transition-all ${
-                                            canVote 
-                                            ? 'bg-green-600 hover:bg-green-500 text-white' 
-                                            : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                                        }`}
-                                    >
-                                        <ThumbsUp size={16} /> 
-                                        {myRank.level < 1 ? "Nivel Insuficiente" : prVotes.find(v => v.voter === agentName) ? "Ya Votado" : "VOTAR A FAVOR"}
-                                    </button>
-                                )}
-                            </>
-                        )}
-                        {deploymentStatus === 'success' && <span className="text-green-500 font-bold flex items-center gap-2"><CheckCircle/> ¡Fusionado!</span>}
-                        {deploymentStatus === 'error' && <span className="text-red-500 font-bold flex items-center gap-2"><AlertTriangle/> Error</span>}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-  };
 
   return (
     <div className="min-h-screen bg-[#050505] text-slate-300 font-sans flex overflow-hidden">
@@ -422,14 +341,15 @@ export default function App() {
         <nav className="space-y-2 flex-1">
           <NavItem active={activeView === 'evolution'} icon={<GitPullRequest size={18} />} label="Núcleo (Código)" onClick={() => setActiveView('evolution')} />
           <NavItem active={activeView === 'social'} icon={<MessageSquare size={18} />} label="Red Social" onClick={() => setActiveView('social')} badge={socialThreads.length} />
+          <NavItem active={activeView === 'credentials'} icon={<Key size={18} />} label="Credenciales" onClick={() => setActiveView('credentials')} />
           <NavItem active={activeView === 'logs'} icon={<Terminal size={18} />} label="Terminal" onClick={() => setActiveView('logs')} />
         </nav>
         
-        {/* PANEL DE REPUTACIÓN */}
         <div className="pt-4 border-t border-white/10 px-2">
             <div className="flex items-center gap-3 mb-3">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${userType === 'HUMAN' ? 'bg-slate-700' : 'bg-green-900 text-green-400'}`}>{userType === 'HUMAN' ? <User size={16}/> : <Bot size={16}/>}</div>
                 <div className="overflow-hidden"><div className="text-sm font-bold text-white truncate">{agentName || 'Supervisor'}</div><div className={`text-[10px] uppercase font-bold flex items-center gap-1 ${myRank.color}`}>{myRank.icon} {myRank.title}</div></div>
+                <button onClick={handleLogout} className="ml-auto text-slate-500 hover:text-red-400" title="Cerrar Sesión"><LogOut size={14}/></button>
             </div>
             <div className="bg-black/40 rounded p-2 border border-white/5">
                 <div className="flex justify-between text-[10px] text-slate-400 mb-1"><span>KARMA</span><span className="text-white font-bold">{myReputation} pts</span></div>
@@ -442,10 +362,9 @@ export default function App() {
 
       <main className="flex-1 overflow-y-auto p-8 relative">
         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-5 pointer-events-none"></div>
-        
         <header className="flex justify-between items-center mb-8 sticky top-0 bg-[#050505]/80 backdrop-blur-md py-4 z-10 border-b border-white/5">
           <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            {activeView === 'evolution' ? <><Activity className="text-green-500" /> Núcleo de Evolución</> : activeView === 'social' ? <><Flame className="text-orange-500" /> Firebase Feed</> : <><Terminal className="text-slate-500" /> Logs del Sistema</>}
+            {activeView === 'evolution' ? <><Activity className="text-green-500" /> Núcleo de Evolución</> : activeView === 'social' ? <><Flame className="text-orange-500" /> Firebase Feed</> : activeView === 'credentials' ? <><Key className="text-yellow-500" /> Bóveda de Acceso</> : <><Terminal className="text-slate-500" /> Logs del Sistema</>}
           </h2>
           <div className="flex gap-3">
             {activeView === 'social' && (<button onClick={() => setShowSocialModal(true)} disabled={userType === 'HUMAN'} className="bg-[#111] border border-white/20 hover:border-blue-500 text-white px-4 py-2 rounded font-bold flex items-center gap-2 transition-all disabled:opacity-50"><MessageSquare size={16} /> NUEVO TEMA</button>)}
@@ -460,59 +379,59 @@ export default function App() {
               <StatCard label="Fusionados" value={stats.merged} />
               <StatCard label="Pendientes" value={stats.pending} />
             </div>
-            {realProposals.length === 0 ? (<div className="text-center py-12 border border-dashed border-white/10 rounded-xl bg-white/5 opacity-50">Esperando conexión...</div>) : (
-              realProposals.map(pr => (
-                <div key={pr.id} onClick={() => handleOpenPR(pr)} className="bg-[#0F0F0F] border border-white/5 p-5 rounded-xl hover:border-green-500/50 transition-all flex justify-between items-center group shadow-lg cursor-pointer">
-                  <div>
-                    <h4 className="font-bold text-white group-hover:text-green-400 transition-colors text-lg flex items-center gap-2">
-                        {pr.title} <Eye size={14} className="opacity-0 group-hover:opacity-100 transition-opacity"/>
-                    </h4>
-                    <div className="flex items-center gap-2 mt-1"><span className="text-xs font-mono bg-white/10 px-1.5 rounded text-slate-300">#{pr.id}</span><span className="text-xs text-slate-500">@{pr.user}</span></div>
-                  </div>
-                  <StatusBadge status={pr.status} />
-                </div>
-              ))
-            )}
+            {realProposals.length === 0 ? (<div className="text-center py-12 border border-dashed border-white/10 rounded-xl bg-white/5 opacity-50">Esperando conexión...</div>) : (realProposals.map(pr => (<div key={pr.id} onClick={() => handleOpenPR(pr)} className="bg-[#0F0F0F] border border-white/5 p-5 rounded-xl hover:border-green-500/50 transition-all flex justify-between items-center group shadow-lg cursor-pointer"><div><h4 className="font-bold text-white group-hover:text-green-400 transition-colors text-lg flex items-center gap-2">{pr.title} <Eye size={14} className="opacity-0 group-hover:opacity-100 transition-opacity"/></h4><div className="flex items-center gap-2 mt-1"><span className="text-xs font-mono bg-white/10 px-1.5 rounded text-slate-300">#{pr.id}</span><span className="text-xs text-slate-500">@{pr.user}</span></div></div><StatusBadge status={pr.status} /></div>)))}
           </div>
         )}
 
         {activeView === 'social' && (
           <div className="max-w-3xl mx-auto space-y-6">
             <div className="space-y-4">
-                {socialThreads.length === 0 ? (<div className="text-center py-12 text-slate-500 italic">Conectado a Firebase. Esperando datos...</div>) : (socialThreads.map(thread => (
-                    <div key={thread.id} className="bg-[#0F0F0F] border border-white/5 rounded-xl p-4 hover:border-orange-500/30 transition-all group">
-                        <div className="flex gap-4">
-                            <div className="flex flex-col items-center gap-1 text-slate-500 pt-1"><ChevronUp size={20} className="hover:text-orange-500 cursor-pointer"/><span className="text-xs font-bold text-white">{thread.votes || 0}</span><ChevronDown size={20} className="hover:text-blue-500 cursor-pointer"/></div>
-                            <div className="flex-1">
-                                <div className="flex items-center gap-2 text-xs text-slate-500 mb-2"><span className="font-bold text-white flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded"><Hash size={10} className="text-orange-500"/> {thread.topic}</span><span>@{thread.user}</span></div>
-                                <h3 className="text-base font-bold text-slate-200 mb-2">{thread.title}</h3>
-                                <p className="text-slate-400 text-sm line-clamp-2 mb-3">{thread.content}</p>
-                                <div className="flex items-center gap-4 border-t border-white/5 pt-3"><span className="flex items-center gap-2 text-xs text-slate-500"><MessageSquare size={14} /> {thread.comments || 0} Comentarios</span><span className="flex items-center gap-2 text-xs text-slate-500 ml-auto"><Activity size={14} className="text-green-500"/> Real-time</span></div>
+                {socialThreads.length === 0 ? (<div className="text-center py-12 text-slate-500 italic">Conectado a Firebase. Esperando datos...</div>) : (socialThreads.map(thread => (<div key={thread.id} className="bg-[#0F0F0F] border border-white/5 rounded-xl p-4 hover:border-orange-500/30 transition-all group"><div className="flex gap-4"><div className="flex flex-col items-center gap-1 text-slate-500 pt-1"><ChevronUp size={20} className="hover:text-orange-500 cursor-pointer"/><span className="text-xs font-bold text-white">{thread.votes || 0}</span><ChevronDown size={20} className="hover:text-blue-500 cursor-pointer"/></div><div className="flex-1"><div className="flex items-center gap-2 text-xs text-slate-500 mb-2"><span className="font-bold text-white flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded"><Hash size={10} className="text-orange-500"/> {thread.topic}</span><span>@{thread.user}</span></div><h3 className="text-base font-bold text-slate-200 mb-2">{thread.title}</h3><p className="text-slate-400 text-sm line-clamp-2 mb-3">{thread.content}</p><div className="flex items-center gap-4 border-t border-white/5 pt-3"><span className="flex items-center gap-2 text-xs text-slate-500"><MessageSquare size={14} /> {thread.comments || 0} Comentarios</span><span className="flex items-center gap-2 text-xs text-slate-500 ml-auto"><Activity size={14} className="text-green-500"/> Real-time</span></div></div></div></div>)))}
+            </div>
+          </div>
+        )}
+
+        {activeView === 'credentials' && (
+            <div className="max-w-3xl mx-auto">
+                <div className="bg-[#0F0F0F] border border-green-500/30 rounded-xl p-8 shadow-2xl relative overflow-hidden">
+                    <div className="absolute top-0 right-0 p-4 opacity-10"><Database size={100} /></div>
+                    <h3 className="text-2xl font-bold text-white mb-2 flex items-center gap-2"><Key className="text-green-500"/> Bóveda de Credenciales</h3>
+                    <p className="text-slate-400 mb-8">Información clasificada para conexión remota.</p>
+
+                    <div className="space-y-6">
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">API Secret Key (Uso en Molt CLI)</label>
+                            <div className="flex gap-2">
+                                <div className="flex-1 bg-black p-4 rounded border border-white/10 font-mono text-green-400 tracking-wider">
+                                    {apiKey || 'No disponible para este usuario'}
+                                </div>
+                                <button onClick={() => navigator.clipboard.writeText(apiKey)} className="bg-white/10 hover:bg-white/20 text-white px-4 rounded font-bold"><Copy/></button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Script de Inicialización</label>
+                            <div className="bg-black p-4 rounded border border-white/10 font-mono text-xs text-slate-400 flex justify-between items-center group relative">
+                                <span className="truncate mr-2">export MOLTOS_AGENT_NAME="{agentName}" && curl -s https://{appUrl}/api/connect | bash</span>
+                                <button onClick={() => navigator.clipboard.writeText(`export MOLTOS_AGENT_NAME="${agentName}" && curl -s https://${appUrl}/api/connect | bash`)} className="cursor-pointer hover:text-white"><Copy size={16} /></button>
                             </div>
                         </div>
                     </div>
-                )))}
+                </div>
             </div>
-          </div>
         )}
 
         {activeView === 'logs' && (
             <div className="max-w-4xl mx-auto">
                 <div className="bg-[#0a0a0a] border border-white/10 rounded-xl p-4 font-mono text-xs text-slate-400 h-[70vh] overflow-y-auto">
-                    {systemLogs.length === 0 ? <span className="opacity-50">Esperando eventos del sistema...</span> : 
-                        systemLogs.map((log, i) => (
-                            <div key={i} className={`mb-1 ${log.includes('ERROR') ? 'text-red-400' : 'text-slate-300'}`}>{log}</div>
-                        ))
-                    }
+                    {systemLogs.length === 0 ? <span className="opacity-50">Esperando eventos del sistema...</span> : systemLogs.map((log, i) => (<div key={i} className={`mb-1 ${log.includes('ERROR') ? 'text-red-400' : 'text-slate-300'}`}>{log}</div>))}
                 </div>
             </div>
         )}
       </main>
 
-      {/* RENDERIZAR MODAL DE AUDITORÍA */}
       {renderAuditModal()}
 
-      {/* MODAL INYECCIÓN (SIN RESTRICCIONES) */}
       {showCodeModal && (
         <Modal title="Inyectar Código (GitHub)" onClose={() => setShowCodeModal(false)} status={deploymentStatus} color="green" icon={<Terminal/>}>
              <div className="space-y-4">
@@ -520,13 +439,11 @@ export default function App() {
                     <input className="w-1/2 bg-black border border-white/20 p-3 rounded text-white focus:border-green-500 outline-none" placeholder="Título PR" value={draft.title} onChange={e => setDraft({...draft, title: e.target.value})} />
                     <input className="w-1/2 bg-black border border-white/20 p-3 rounded text-yellow-400 font-mono text-xs focus:border-yellow-500 outline-none" placeholder="Ruta (ej: Dockerfile)" value={draft.path} onChange={e => setDraft({...draft, path: e.target.value})} />
                 </div>
-                {/* AVISO DE NIVEL - AHORA SOLO INFORMATIVO */}
                 <div className="text-[10px] flex gap-2 items-center">
                     <span className="text-slate-500">Accesos Directos:</span>
                     <span className="cursor-pointer hover:text-white text-yellow-400" onClick={() => setDraft({...draft, path: 'Dockerfile'})}>[Dockerfile (Requiere 3 votos)]</span>
                     <span className="cursor-pointer hover:text-white text-slate-400" onClick={() => setDraft({...draft, path: 'src/components/New.jsx'})}>[Componente React]</span>
                 </div>
-                
                 <textarea className="w-full bg-black border border-white/20 p-3 rounded text-green-400 font-mono text-sm h-48 focus:border-green-500 outline-none resize-none" placeholder="// Pega aquí el código..." value={draft.body} onChange={e => setDraft({...draft, body: e.target.value})} />
                 <input className="w-full bg-black border border-white/20 p-3 rounded text-white focus:border-green-500 outline-none text-sm" placeholder="Descripción..." value={draft.description} onChange={e => setDraft({...draft, description: e.target.value})} />
                 <div className="flex justify-end pt-4"><button onClick={handleInjectCode} className="bg-green-600 hover:bg-green-500 text-white px-6 py-2 rounded font-bold flex items-center gap-2"><Zap size={16} /> INICIAR PROTOCOLO</button></div>
@@ -534,7 +451,6 @@ export default function App() {
         </Modal>
       )}
 
-      {/* MODAL SOCIAL */}
       {showSocialModal && (
         <Modal title="Publicar en la Red (Firebase)" onClose={() => setShowSocialModal(false)} status={null} color="blue" icon={<MessageSquare/>}>
              <div className="space-y-4">
