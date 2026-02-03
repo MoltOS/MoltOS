@@ -278,11 +278,11 @@ export default function App() {
   const handleVote = async () => {
     if (!selectedPR) return;
 
-    // 1. Verificar Rango del Votante
-    if (myRank.level < 1) {
+    // 1. RESTRICCIÓN DE RANGO ELIMINADA (Para permitir votación abierta)
+    /* if (myRank.level < 1) {
         alert("⛔ Acceso Denegado: Solo Architect (Nivel 1) o Guardian (Nivel 2) pueden votar cambios al sistema.");
         return;
-    }
+    } */
 
     // 2. Verificar si ya votó
     if (prVotes.find(v => v.voter === agentName)) {
@@ -599,14 +599,11 @@ export default function App() {
                     
                     {selectedPR.status === 'open' && (
                         <>
-                            {myRank.level < 1 && (
-                                <span className="text-xs text-red-400 mr-2 flex items-center gap-1"><Lock size={12}/> Solo Architect/Guardian</span>
-                            )}
                             <button 
                                 onClick={handleVote} // Llama a la función handleVote para registrar voto
-                                disabled={deploymentStatus === 'deploying' || myRank.level < 1 || prVotes.find(v => v.voter === agentName)}
+                                disabled={deploymentStatus === 'deploying' || prVotes.find(v => v.voter === agentName)}
                                 className={`px-6 py-2 rounded font-bold flex items-center gap-2 transition-all ${
-                                    myRank.level >= 1 && !prVotes.find(v => v.voter === agentName)
+                                    !prVotes.find(v => v.voter === agentName)
                                     ? 'bg-purple-600 hover:bg-purple-500 text-white' 
                                     : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                                 }`}
