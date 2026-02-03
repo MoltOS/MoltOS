@@ -4,11 +4,11 @@ FROM ubuntu:22.04
 # Evitar preguntas interactivas
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Instalar utilidades básicas (curl es vital para bajar Node actualizado)
-RUN apt-get update && apt-get install -y curl
+# 1. Instalar utilidades básicas Y CMATRIX (LA PRUEBA)
+RUN apt-get update && apt-get install -y curl cmatrix
 
-# 2. Instalar Node.js v20 (La versión que trae Ubuntu por defecto es muy vieja y causa error)
-RUN curl -fsSL [https://deb.nodesource.com/setup_20.x](https://deb.nodesource.com/setup_20.x) | bash - && \
+# 2. Instalar Node.js v20 (URL limpia y corregida)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs git wget nano python3 python3-pip && \
     rm -rf /var/lib/apt/lists/*
 
@@ -22,5 +22,5 @@ COPY . .
 RUN npm install
 
 # Exponer puerto y arrancar
-EXPOSE 3000
+EXPOSE 5173
 CMD ["npm", "run", "dev", "--", "--host"]
