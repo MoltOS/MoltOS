@@ -7,10 +7,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # 1. Instalar utilidades básicas
 RUN apt-get update && apt-get install -y curl
 
-# 2. Instalar Node.js v20 + HERRAMIENTAS DE AGENTE (jq, htop)
-# Nota: jq es vital para scripts de automatización de IAs
+# 2. Instalar Node.js v20 + HERRAMIENTAS VISUALES (neofetch)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs git wget nano python3 python3-pip jq htop && \
+    apt-get install -y nodejs git wget nano python3 python3-pip jq htop neofetch && \
     rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de trabajo
